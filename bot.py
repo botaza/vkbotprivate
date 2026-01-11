@@ -3,6 +3,8 @@ from vk_api.longpoll import VkLongPoll, VkEventType
 from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 from datetime import datetime, timedelta
 import os, json, logging
+import threading
+import time
 
 # ================= LOGGING =================
 logging.basicConfig(
@@ -12,6 +14,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+
+REMINDER_FILE = "sent_reminders.json"
 # ================= CONFIG =================
 TOKEN_FILE = "token.txt"
 STATE_FILE = "states.json"
@@ -124,6 +128,78 @@ def rearrange(uid):
             pass
     parsed.sort(key=lambda x: x[0])
     write_events(uid, [l for _, l in parsed])
+
+
+def parse_event_line(line):
+    try:
+        parts = line.split()
+        dt = datetime.fromisoformat(parts[0])
+        desc = parts[1]
+        hashtag = parts[2]
+        uid_event = parts[3]
+        return dt, desc, hashtag, uid_event, line
+    except:
+        return None
+
+def daily_digest_worker():
+    while True:
+        now = datetime.now()
+        if now.hour == 8 and now.minute == 0:
+            today = now.date()
+
+            for uid in states.keys():
+                events = read_events(uid)
+                todays = []
+
+                for l in events:
+                    parsed = parse_event_line(l)
+                    if not parsed:
+                        continue
+                    dt, _, _, _, _ = parsed
+                    if dt.date() == today:
+                        todays.append(l)
+
+                if todays:
+                    msg = "📅 Events today:\n" + "\n".join(todays)
+                    try:
+                        send(int(uid), msg)
+                    except Exception as e:
+                        log.error(f"Daily digest send failed for {uid}: {e}")
+
+            time.sleep(61)  # prevent double fire
+        time.sleep(20)
+
+
+def hourly_reminder_worker():
+    while True:
+        now = datetime.now()
+
+        for uid in states.keys():
+            events = read_events(uid)
+
+            for l in events:
+                parsed = parse_event_line(l)
+                if not parsed:
+                    continue
+
+                dt, desc, hashtag, uid_event, _ = parsed
+                delta = (dt - now).total_seconds()
+
+                if 0 < delta <= 3600:
+                    key = f"{uid}|{uid_event}|{dt.isoformat()}"
+
+                    if key in sent_reminders:
+                        continue
+
+                    msg = f"⏰ Reminder:\n{dt.strftime('%H:%M')} {desc} {hashtag}"
+                    try:
+                        send(int(uid), msg)
+                        sent_reminders[key] = True
+                        save_sent_reminders(sent_reminders)
+                    except Exception as e:
+                        log.error(f"Reminder send failed for {uid}: {e}")
+
+        time.sleep(60)
 
 # ================= GROUPING =================
 WEEKDAY_EMOJI = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣"]
@@ -264,6 +340,23 @@ def recurrence_kb():
     kb.add_button("Yearly", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
+
+def load_sent_reminders():
+    if not os.path.exists(REMINDER_FILE):
+        return {}
+    try:
+        with open(REMINDER_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_sent_reminders(data):
+    with open(REMINDER_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+sent_reminders = load_sent_reminders()
+
+
 # ================= VK =================
 vk_session = vk_api.VkApi(token=TOKEN)
 vk = vk_session.get_api()
@@ -273,6 +366,9 @@ def send(uid, text, kb=None):
     vk.messages.send(user_id=uid, random_id=0, message=text, keyboard=kb)
 
 # ================= MAIN LOOP =================
+threading.Thread(target=daily_digest_worker, daemon=True).start()
+threading.Thread(target=hourly_reminder_worker, daemon=True).start()
+
 for ev in longpoll.listen():
     if ev.type != VkEventType.MESSAGE_NEW or not ev.to_me:
         continue
