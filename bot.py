@@ -743,7 +743,9 @@ for ev in longpoll.listen():
                 if 0 <= idx < len(events):
                     set_data(uid, "edit_idx", idx)
                     set_state(uid, STATE_EDIT_INPUT)
+                    send(uid, f"Текст оригинального сообщения для правки")                    
                     send(uid, f"{events[idx]}")
+                    send(uid, f"Отправь измененную версию")
                 else:
                     send(uid, "Invalid number.", nav_kb(True))
             except:
