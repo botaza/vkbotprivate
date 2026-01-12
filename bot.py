@@ -112,6 +112,8 @@ def extract_hashtag(text):
     m = HASHTAG_RE.search(text)
     return m.group(1) if m else None
 
+def line_has_uid(line, uid_value):
+    return uid_value in line.split()
 
 
 # ================= PLANNER =================
@@ -224,6 +226,48 @@ def hourly_reminder_worker():
         time.sleep(60)
 
 
+def daily_hashtag_reminder_worker():
+    last_run_date = None
+
+    while True:
+        now = datetime.now()
+
+        if now.hour == 17 and now.minute == 0:
+            today = now.date()
+
+            # prevent double-fire same day
+            if last_run_date == today:
+                time.sleep(61)
+                continue
+
+            last_run_date = today
+
+            for uid in states.keys():
+                events = read_events(uid)
+
+                for l in events:
+                    parsed = parse_event_line(l)
+                    if not parsed:
+                        continue
+
+                    dt, desc, hashtag, uid_event, line = parsed
+
+                    # only future or ongoing events WITH hashtag
+                    if hashtag and dt >= now:
+                        try:
+                            send(
+                                int(uid),
+                                f"🔔 Reminder:\n{line}"
+                            )
+                        except Exception as e:
+                            log.error(f"17:00 reminder failed for {uid}: {e}")
+
+            time.sleep(61)  # prevent same-minute double send
+
+        time.sleep(20)
+
+
+
 def done_file(uid):
     return os.path.join(PLANNER_DIR, f"{uid}done.txt")
 
@@ -328,8 +372,9 @@ def hour_kb():
     kb.add_line()
     kb.add_button("18", VkKeyboardColor.PRIMARY)
     kb.add_button("20", VkKeyboardColor.PRIMARY)
-    kb.add_button("21", VkKeyboardColor.PRIMARY)
+    kb.add_button("23", VkKeyboardColor.PRIMARY)
     return kb.get_keyboard()
+
 
 
 def minute_kb():
@@ -426,6 +471,8 @@ def send(uid, text, kb=None):
 # ================= MAIN LOOP =================
 threading.Thread(target=daily_digest_worker, daemon=True).start()
 threading.Thread(target=hourly_reminder_worker, daemon=True).start()
+threading.Thread(target=daily_hashtag_reminder_worker, daemon=True).start()
+
 
 for ev in longpoll.listen():
     if ev.type != VkEventType.MESSAGE_NEW or not ev.to_me:
@@ -816,13 +863,14 @@ for ev in longpoll.listen():
 # ===== DELETE BY UID =====
     if state == STATE_DELETE_UID:
         del_uid = text.strip()
-        events = [e for e in read_events(uid) if del_uid not in e]
+        events = [e for e in read_events(uid) if not line_has_uid(e, del_uid)]
         write_events(uid, events)
         rearrange(uid)
         send(uid, f"Deleted events with UID {del_uid}.", main_menu_kb())
         clear_data(uid)
         set_state(uid, STATE_START)
         continue
+
 
 
 # ===== EDIT COMPLETED =====
