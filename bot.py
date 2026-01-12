@@ -51,6 +51,11 @@ STATE_DELETE_UID = "delete_uid"
 STATE_EDIT_SELECT = "edit_select"
 STATE_EDIT_INPUT = "edit_input"
 
+STATE_COMPLETE = "complete"
+STATE_EDIT_DONE_SELECT = "edit_done_select"
+STATE_EDIT_DONE_INPUT = "edit_done_input"
+
+
 # ================= TOKEN =================
 with open(TOKEN_FILE, "r", encoding="utf-8") as f:
     TOKEN = f.read().strip()
@@ -218,6 +223,23 @@ def hourly_reminder_worker():
 
         time.sleep(60)
 
+
+def done_file(uid):
+    return os.path.join(PLANNER_DIR, f"{uid}done.txt")
+
+
+def append_done(uid, text):
+    with open(done_file(uid), "a", encoding="utf-8") as f:
+        f.write(text.strip() + "\n")
+
+
+def read_done(uid):
+    if not os.path.exists(done_file(uid)):
+        return []
+    with open(done_file(uid), "r", encoding="utf-8") as f:
+        return [l.rstrip() for l in f if l.strip()]
+
+
 # ================= GROUPING =================
 WEEKDAY_EMOJI = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣"]
 
@@ -337,16 +359,18 @@ def place_kb():
 def main_menu_kb():
     kb = VkKeyboard(one_time=True)
     kb.add_button("Suggest events", VkKeyboardColor.POSITIVE)
+    kb.add_button("Complete", VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("List events", VkKeyboardColor.PRIMARY)
+    kb.add_button("List completed", VkKeyboardColor.PRIMARY)
     kb.add_line()
     kb.add_button("Del No", VkKeyboardColor.NEGATIVE)
     kb.add_button("Del Hash", VkKeyboardColor.NEGATIVE)
     kb.add_button("Del ID", VkKeyboardColor.NEGATIVE)
     kb.add_line()
     kb.add_button("Edit event", VkKeyboardColor.SECONDARY)
+    kb.add_button("Edit completed", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
-
 
 def list_menu_kb():
     kb = VkKeyboard(one_time=True)
@@ -477,9 +501,48 @@ for ev in longpoll.listen():
                 set_data(uid, "offset", 0)
                 set_state(uid, STATE_EDIT_SELECT)
                 send_batch(uid, "msgs", "offset")
+
+        elif text == "Edit completed":
+            events = read_done(uid)
+            if not events:
+                send(uid, "No completed events.", main_menu_kb())
+            else:
+                clear_data(uid)
+                set_data(uid, "msgs", group_by_day(events))
+                set_data(uid, "offset", 0)
+                set_state(uid, STATE_EDIT_DONE_SELECT)
+                send_batch(uid, "msgs", "offset")
+
+
+        elif text == "Complete":
+            events = read_events(uid)
+            if not events:
+                send(uid, "No events to complete.", main_menu_kb())
+            else:
+                clear_data(uid)
+                set_data(uid, "msgs", group_by_day(events))
+                set_data(uid, "offset", 0)
+                set_state(uid, STATE_COMPLETE)
+                send_batch(uid, "msgs", "offset")
+
+
+        elif text == "List completed":
+            events = read_done(uid)
+            if not events:
+                send(uid, "No completed events.", main_menu_kb())
+            else:
+                clear_data(uid)
+                set_data(uid, "msgs", group_by_day(events))
+                set_data(uid, "offset", 0)
+                set_state(uid, STATE_LIST_VIEW)
+                send_batch(uid, "msgs", "offset")
+
+
         else:
             send(uid, "Menu:", main_menu_kb())
         continue
+
+
 
 # ===== Suggest Event flow continues in Part 3 =====
 # ================= SUGGEST EVENT FLOW =================
@@ -710,6 +773,35 @@ for ev in longpoll.listen():
             set_state(uid, STATE_START)
         continue
 
+
+# ===== COMPLETE EVENT =====
+    if state == STATE_COMPLETE:
+        if text == "Next":
+            send_batch(uid, "msgs", "offset")
+        else:
+            try:
+                idx = int(text) - 1
+                events = read_events(uid)
+
+                if 0 <= idx < len(events):
+                    completed = events.pop(idx)
+
+                    append_done(uid, completed)
+
+                    write_events(uid, events)
+                    rearrange(uid)
+
+                    send(uid, f"✅ Completed:\n{completed}", main_menu_kb())
+                else:
+                    send(uid, "Invalid number.", nav_kb(True))
+            except:
+                send(uid, "Enter number.", nav_kb(True))
+
+            clear_data(uid)
+            set_state(uid, STATE_START)
+        continue
+
+
 # ===== DELETE BY HASHTAG =====
     if state == STATE_DELETE_HASHTAG:
         tag = text.strip()
@@ -731,6 +823,43 @@ for ev in longpoll.listen():
         clear_data(uid)
         set_state(uid, STATE_START)
         continue
+
+
+# ===== EDIT COMPLETED =====
+    if state == STATE_EDIT_DONE_SELECT:
+        if text == "Next":
+            send_batch(uid, "msgs", "offset")
+        else:
+            try:
+                idx = int(text) - 1
+                events = read_done(uid)
+                if 0 <= idx < len(events):
+                    set_data(uid, "edit_idx", idx)
+                    set_state(uid, STATE_EDIT_DONE_INPUT)
+                    send(uid, "Текст оригинального сообщения для правки")
+                    send(uid, events[idx])
+                    send(uid, "Отправь измененную версию")
+                else:
+                    send(uid, "Invalid number.", nav_kb(True))
+            except:
+                send(uid, "Enter number.", nav_kb(True))
+        continue
+
+    if state == STATE_EDIT_DONE_INPUT:
+        idx = get_data(uid, "edit_idx")
+        events = read_done(uid)
+        if idx is not None and 0 <= idx < len(events):
+            events[idx] = text.strip()
+            with open(done_file(uid), "w", encoding="utf-8") as f:
+                for e in events:
+                    f.write(e + "\n")
+            send(uid, "Updated.", main_menu_kb())
+        else:
+            send(uid, "Edit failed.", main_menu_kb())
+        clear_data(uid)
+        set_state(uid, STATE_START)
+        continue
+
 
 # ===== EDIT =====
     if state == STATE_EDIT_SELECT:
