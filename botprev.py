@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 import os, json, logging
 import threading
 import time
-import re
 
 # ================= LOGGING =================
 logging.basicConfig(
@@ -99,16 +98,6 @@ def next_uid(uid):
     save_states()
     return f"uid{val}"
 
-
-HASHTAG_RE = re.compile(r"(#\w+)")
-
-def extract_hashtag(text):
-    """Return first hashtag in a line or None if missing"""
-    m = HASHTAG_RE.search(text)
-    return m.group(1) if m else None
-
-
-
 # ================= PLANNER =================
 def planner(uid):
     return os.path.join(PLANNER_DIR, f"{uid}plan.txt")
@@ -145,17 +134,11 @@ def parse_event_line(line):
     try:
         parts = line.split()
         dt = datetime.fromisoformat(parts[0])
-        
-        hashtag = extract_hashtag(line)
-        uid_event = next((p for p in parts if p.startswith("uid")), None)
-        # Description is everything after datetime and before uid/hashtag
-        desc_start = line.find(' ') + 1
-        desc_end = line.find(uid_event) if uid_event else len(line)
-        desc_text = line[desc_start:desc_end].strip()
-        
-        return dt, desc_text, hashtag, uid_event, line
-    except Exception as e:
-        log.warning(f"Failed parsing line: {line} | {e}")
+        desc = parts[1]
+        hashtag = parts[2]
+        uid_event = parts[3]
+        return dt, desc, hashtag, uid_event, line
+    except:
         return None
 
 def daily_digest_worker():
@@ -279,11 +262,10 @@ def year_kb():
 def month_kb():
     kb = VkKeyboard(one_time=True)
     now = datetime.now().month
-    kb.add_button(f"{now:02d}", VkKeyboardColor.PRIMARY)
+    kb.add_button(str(now), VkKeyboardColor.PRIMARY)
     kb.add_line()
-    kb.add_button(f"{((now % 12) + 1):02d}", VkKeyboardColor.PRIMARY)
+    kb.add_button(str((now % 12) + 1), VkKeyboardColor.PRIMARY)
     return kb.get_keyboard()
-
 
 def day_kb():
     kb = VkKeyboard(one_time=True)
@@ -296,36 +278,21 @@ def day_kb():
 # ================= KEYBOARDS (HOUR / MINUTE / DURATION / PLACE) =================
 def hour_kb():
     kb = VkKeyboard(one_time=True)
-    kb.add_button("08", VkKeyboardColor.PRIMARY)
-    kb.add_button("10", VkKeyboardColor.PRIMARY)
-    kb.add_button("11", VkKeyboardColor.PRIMARY)
+    kb.add_button("00", VkKeyboardColor.PRIMARY)
     kb.add_line()
-    kb.add_button("13", VkKeyboardColor.PRIMARY)
-    kb.add_button("15", VkKeyboardColor.PRIMARY)
-    kb.add_button("16", VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button("18", VkKeyboardColor.PRIMARY)
-    kb.add_button("20", VkKeyboardColor.PRIMARY)
-    kb.add_button("21", VkKeyboardColor.PRIMARY)
+    kb.add_button("23", VkKeyboardColor.PRIMARY)
     return kb.get_keyboard()
-
 
 def minute_kb():
     kb = VkKeyboard(one_time=True)
     kb.add_button("00", VkKeyboardColor.PRIMARY)
-    kb.add_button("10", VkKeyboardColor.PRIMARY)
-    kb.add_button("30", VkKeyboardColor.PRIMARY)
     kb.add_line()
-    kb.add_button("40", VkKeyboardColor.PRIMARY)
-    kb.add_button("50", VkKeyboardColor.PRIMARY)
     kb.add_button("59", VkKeyboardColor.PRIMARY)
     return kb.get_keyboard()
 
 def duration_kb():
     kb = VkKeyboard(one_time=True)
     kb.add_button("?", VkKeyboardColor.PRIMARY)
-    kb.add_button("60", VkKeyboardColor.PRIMARY)
-    kb.add_button("90", VkKeyboardColor.PRIMARY)
     return kb.get_keyboard()
 
 def place_kb():
@@ -340,13 +307,12 @@ def main_menu_kb():
     kb.add_line()
     kb.add_button("List events", VkKeyboardColor.PRIMARY)
     kb.add_line()
-    kb.add_button("Del No", VkKeyboardColor.NEGATIVE)
-    kb.add_button("Del Hash", VkKeyboardColor.NEGATIVE)
-    kb.add_button("Del ID", VkKeyboardColor.NEGATIVE)
+    kb.add_button("Delete by number", VkKeyboardColor.NEGATIVE)
+    kb.add_button("Delete by hashtag", VkKeyboardColor.NEGATIVE)
+    kb.add_button("Delete by UID", VkKeyboardColor.NEGATIVE)
     kb.add_line()
     kb.add_button("Edit event", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
-
 
 def list_menu_kb():
     kb = VkKeyboard(one_time=True)
@@ -425,13 +391,6 @@ for ev in longpoll.listen():
         send(uid, "Rearranged.", main_menu_kb())
         continue
 
-    # ===== BACK TO MENU (GLOBAL) =====
-    if text == "Back to menu":
-        clear_data(uid)
-        set_state(uid, STATE_START)
-        send(uid, "Menu:", main_menu_kb())
-        continue
-
     # ===== START MENU =====
     if state == STATE_START:
         if text == "Suggest events":
@@ -441,7 +400,7 @@ for ev in longpoll.listen():
         elif text == "List events":
             set_state(uid, STATE_LIST_MENU)
             send(uid, "Choose:", list_menu_kb())
-        elif text == "Del No":
+        elif text == "Delete by number":
             events = read_events(uid)
             if not events:
                 send(uid, "No events to delete.", main_menu_kb())
@@ -451,15 +410,24 @@ for ev in longpoll.listen():
                 set_data(uid, "offset", 0)
                 set_state(uid, STATE_DELETE)
                 send_batch(uid, "msgs", "offset")
-        elif text == "Del Hash":
+        elif text == "Delete by hashtag":
             events = read_events(uid)
             if not events:
                 send(uid, "No events to delete.", main_menu_kb())
             else:
-                clear_data(uid)
-                set_state(uid, STATE_DELETE_HASHTAG)
-                send(uid, "Enter hashtag to delete:")
-        elif text == "Del ID":
+                hashtags = set()
+                for e in events:
+                    parts = e.split()
+                    if len(parts) >= 3:
+                        hashtags.add(parts[2])
+                if not hashtags:
+                    send(uid, "No hashtags found.", main_menu_kb())
+                else:
+                    clear_data(uid)
+                    set_data(uid, "hashtags", list(hashtags))
+                    set_state(uid, STATE_DELETE_HASHTAG)
+                    send(uid, "Existing hashtags:\n" + "\n".join(hashtags))
+        elif text == "Delete by UID":
             events = read_events(uid)
             if not events:
                 send(uid, "No events to delete.", main_menu_kb())
@@ -551,29 +519,13 @@ for ev in longpoll.listen():
     # ===== RECURRENCE =====
     if state == STATE_SUGGEST_RECURRENCE:
         recurrence_options = ["One-time", "Weekly", "Biweekly", "Monthly", "Yearly"]
-
         if text in recurrence_options:
-            recurrence = text.lower()
-            set_data(uid, "recurrence", recurrence)
-
-            if recurrence == "one-time":
-                set_data(uid, "count", 1)
-                set_state(uid, STATE_SUGGEST_DURATION)
-                send(
-                    uid,
-                    "Enter duration in minutes (or ? for unknown):",
-                    duration_kb()
-                )
-            else:
-                set_state(uid, STATE_SUGGEST_COUNT)
-                send(uid, "Enter number of occurrences:")
-
+            set_data(uid, "recurrence", text.lower())
+            set_state(uid, STATE_SUGGEST_COUNT)
+            send(uid, "Enter number of occurrences:")
         else:
             send(uid, "Select recurrence:", recurrence_kb())
-
         continue
-
-
 
     # ===== COUNT =====
     if state == STATE_SUGGEST_COUNT:
@@ -589,7 +541,7 @@ for ev in longpoll.listen():
     if state == STATE_SUGGEST_DURATION:
         set_data(uid, "duration", text)
         set_state(uid, STATE_SUGGEST_PLACE)
-        send(uid, "Enter place (can be ?):", place_kb())
+        send(uid, "Enter place (can be blank or ?):", place_kb())
         continue
 
     # ===== PLACE & SAVE EVENT =====
