@@ -743,7 +743,7 @@ for ev in longpoll.listen():
                 if 0 <= idx < len(events):
                     set_data(uid, "edit_idx", idx)
                     set_state(uid, STATE_EDIT_INPUT)
-                    send(uid, f"Original line:\n{events[idx]}\n\nSend edited version:")
+                    send(uid, f"{events[idx]}")
                 else:
                     send(uid, "Invalid number.", nav_kb(True))
             except:
