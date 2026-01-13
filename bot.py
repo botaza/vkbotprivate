@@ -54,6 +54,7 @@ STATE_EDIT_INPUT = "edit_input"
 STATE_COMPLETE = "complete"
 STATE_EDIT_DONE_SELECT = "edit_done_select"
 STATE_EDIT_DONE_INPUT = "edit_done_input"
+STATE_DELETE_DONE = "delete_done"
 
 
 # ================= TOKEN =================
@@ -414,8 +415,10 @@ def main_menu_kb():
     kb.add_button("Del ID", VkKeyboardColor.NEGATIVE)
     kb.add_line()
     kb.add_button("Edit event", VkKeyboardColor.SECONDARY)
+    kb.add_button("Del C", VkKeyboardColor.NEGATIVE)
     kb.add_button("Edit completed", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
+
 
 def list_menu_kb():
     kb = VkKeyboard(one_time=True)
@@ -548,6 +551,18 @@ for ev in longpoll.listen():
                 set_data(uid, "offset", 0)
                 set_state(uid, STATE_EDIT_SELECT)
                 send_batch(uid, "msgs", "offset")
+
+        elif text == "Del C":
+            events = read_done(uid)
+            if not events:
+                send(uid, "No completed events to delete.", main_menu_kb())
+            else:
+                clear_data(uid)
+                set_data(uid, "msgs", group_by_day(events))
+                set_data(uid, "offset", 0)
+                set_state(uid, STATE_DELETE_DONE)
+                send_batch(uid, "msgs", "offset")
+
 
         elif text == "Edit completed":
             events = read_done(uid)
@@ -871,6 +886,31 @@ for ev in longpoll.listen():
         set_state(uid, STATE_START)
         continue
 
+# ===== DELETE COMPLETED BY NUMBER =====
+    if state == STATE_DELETE_DONE:
+        if text == "Next":
+            send_batch(uid, "msgs", "offset")
+        else:
+            try:
+                idx = int(text) - 1
+                events = read_done(uid)
+
+                if 0 <= idx < len(events):
+                    removed = events.pop(idx)
+
+                    with open(done_file(uid), "w", encoding="utf-8") as f:
+                        for e in events:
+                            f.write(e + "\n")
+
+                    send(uid, f"Deleted:\n{removed}", main_menu_kb())
+                else:
+                    send(uid, "Invalid number.", nav_kb(True))
+            except:
+                send(uid, "Enter number.", nav_kb(True))
+
+            clear_data(uid)
+            set_state(uid, STATE_START)
+        continue
 
 
 # ===== EDIT COMPLETED =====
