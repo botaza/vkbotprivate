@@ -227,46 +227,52 @@ def hourly_reminder_worker():
         time.sleep(60)
 
 
+EVENT_RE = re.compile(r"\bevent\b", re.IGNORECASE)
+
 def daily_hashtag_reminder_worker():
     last_run_date = None
 
     while True:
         now = datetime.now()
+        today = now.date()
 
-        if now.hour == 17 and now.minute == 0:
-            today = now.date()
-
-            # prevent double-fire same day
+        # run once per day between 17:00 and 17:02
+        if now.hour == 17 and now.minute < 2:
             if last_run_date == today:
-                time.sleep(61)
+                time.sleep(30)
                 continue
 
             last_run_date = today
 
-            for uid in states.keys():
+            for uid in list(states.keys()):
                 events = read_events(uid)
+                day_map = {}
 
-                for l in events:
-                    parsed = parse_event_line(l)
+                for line in events:
+                    parsed = parse_event_line(line)
                     if not parsed:
                         continue
 
-                    dt, desc, hashtag, uid_event, line = parsed
+                    dt, _, _, _, raw_line = parsed
 
-                    # only future or ongoing events WITH hashtag
-                    if hashtag and dt >= now:
-                        try:
-                            send(
-                                int(uid),
-                                f"🔔 Reminder:\n{line}"
-                            )
-                        except Exception as e:
-                            log.error(f"17:00 reminder failed for {uid}: {e}")
+                    # only future or today events containing word "event"
+                    if dt >= now and EVENT_RE.search(raw_line):
+                        day = dt.date()
+                        day_map.setdefault(day, []).append(raw_line)
 
-            time.sleep(61)  # prevent same-minute double send
+                # send grouped messages
+                for day in sorted(day_map):
+                    block = "\n".join(day_map[day])
+                    msg = f"📌 Event reminders for {day}:\n{block}"
+
+                    try:
+                        send(int(uid), msg)
+                    except Exception as e:
+                        log.error(f"17:00 event reminder failed for {uid}: {e}")
+
+            time.sleep(90)  # lockout window
 
         time.sleep(20)
-
 
 
 def done_file(uid):
