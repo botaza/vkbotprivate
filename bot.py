@@ -255,15 +255,24 @@ def daily_hashtag_reminder_worker():
 
                     dt, _, _, _, raw_line = parsed
 
-                    # only future or today events containing word "event"
+                    # only today or future events containing word "event"
                     if dt >= now and EVENT_RE.search(raw_line):
                         day = dt.date()
                         day_map.setdefault(day, []).append(raw_line)
 
-                # send grouped messages
+                # send grouped messages by day
                 for day in sorted(day_map):
+                    weekday_num = datetime.combine(
+                        day, datetime.min.time()
+                    ).isoweekday()  # 1=Mon ... 7=Sun
+
+                    weekday_emoji = WEEKDAY_EMOJI[weekday_num]
                     block = "\n".join(day_map[day])
-                    msg = f"📌 Event reminders for {day}:\n{block}"
+
+                    msg = (
+                        f"📌 {weekday_emoji} Event reminders for {day}:\n"
+                        f"{block}"
+                    )
 
                     try:
                         send(int(uid), msg)
