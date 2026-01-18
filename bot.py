@@ -21,7 +21,7 @@ REMINDER_FILE = "sent_reminders.json"
 TOKEN_FILE = "token.txt"
 STATE_FILE = "states.json"
 PLANNER_DIR = "planners"
-DAYS_PER_BATCH = 10
+DAYS_PER_BATCH = 4
 
 os.makedirs(PLANNER_DIR, exist_ok=True)
 
@@ -841,7 +841,8 @@ for ev in longpoll.listen():
                     removed = events.pop(idx)
                     write_events(uid, events)
                     rearrange(uid)
-                    send(uid, f"Deleted:\n{removed}", main_menu_kb())
+                    send(uid, f"Deleted:")
+                    send(uid, f"{removed}", main_menu_kb())
                 else:
                     send(uid, "Invalid number.", nav_kb(True))
             except:
@@ -917,7 +918,8 @@ for ev in longpoll.listen():
                         for e in events:
                             f.write(e + "\n")
 
-                    send(uid, f"Deleted:\n{removed}", main_menu_kb())
+                    send(uid, f"Deleted:")
+                    send(uid, f"{removed}", main_menu_kb())
                 else:
                     send(uid, "Invalid number.", nav_kb(True))
             except:
