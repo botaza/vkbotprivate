@@ -319,12 +319,22 @@ def group_by_day(events):
         day_map.setdefault(day, []).append((idx, line))
 
     messages = []
+    today = datetime.now().date()
+
     for day in sorted(day_map):
-        wd = WEEKDAY_EMOJI[datetime.combine(day, datetime.min.time()).isoweekday()]
+        weekday_num = datetime.combine(
+            day, datetime.min.time()
+        ).isoweekday()
+
+        wd = WEEKDAY_EMOJI[weekday_num]
+
+        overdue_prefix = "⏳ " if day < today else ""
+
         block = "\n".join(f"{i+1}. {l}" for i, l in day_map[day])
-        messages.append(f"{wd} {day}\n{block}")
+        messages.append(f"{overdue_prefix}{wd} {day}\n{block}")
 
     return messages
+
 
 # ================= PAGINATION =================
 def send_batch(uid, key_msgs, key_offset):
@@ -339,6 +349,10 @@ def send_batch(uid, key_msgs, key_offset):
         set_state(uid, STATE_START)
         return
 
+    # send current date before the batch
+    today_str = datetime.now().date().isoformat()
+    send(uid, f"📅 Today: {today_str}")
+
     for m in batch:
         send(uid, m)
 
@@ -347,6 +361,7 @@ def send_batch(uid, key_msgs, key_offset):
 
     kb = nav_kb(data[key_offset] < len(msgs))
     send(uid, "Navigation:", kb)
+
 
 # ================= KEYBOARDS (YEAR / MONTH / DAY) =================
 def year_kb():
