@@ -852,16 +852,21 @@ for ev in longpoll.listen():
             try:
                 idx = int(text) - 1
                 events = read_events(uid)
+
                 if 0 <= idx < len(events):
                     removed = events.pop(idx)
                     write_events(uid, events)
                     rearrange(uid)
-                    send(uid, f"Deleted:")
-                    send(uid, f"{removed}", main_menu_kb())
+
+                    send(uid, "You've deleted entry:")
+                    send(uid, removed)
+                    send(uid, "Done.", main_menu_kb())
+
                 else:
                     send(uid, "Invalid number.", nav_kb(True))
             except:
                 send(uid, "Enter number.", nav_kb(True))
+
             clear_data(uid)
             set_state(uid, STATE_START)
         continue
@@ -891,8 +896,12 @@ for ev in longpoll.listen():
                     write_events(uid, events)
                     rearrange(uid)
 
-                    send(uid, "Deleted:")
-                    send(uid, "\n".join(removed), main_menu_kb())
+                    send(uid, "You've deleted entries:")
+
+                    for r in removed:
+                        send(uid, r)
+
+                    send(uid, "Done.", main_menu_kb())
 
             except:
                 send(uid, "Enter numbers separated by spaces.", nav_kb(True))
@@ -900,8 +909,6 @@ for ev in longpoll.listen():
             clear_data(uid)
             set_state(uid, STATE_START)
         continue
-
-
 
 # ===== COMPLETE EVENT =====
     if state == STATE_COMPLETE:
