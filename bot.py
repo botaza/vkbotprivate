@@ -44,7 +44,6 @@ STATE_LIST_MENU = "list_menu"
 STATE_LIST_VIEW = "list_view"
 STATE_FILTER = "filter"
 
-STATE_DELETE = "delete"
 STATE_DELETE_HASHTAG = "delete_hashtag"
 STATE_DELETE_UID = "delete_uid"
 
@@ -426,7 +425,6 @@ def main_menu_kb():
     kb.add_button("Del Ar", VkKeyboardColor.NEGATIVE)
     kb.add_button("List completed", VkKeyboardColor.PRIMARY)
     kb.add_line()
-    kb.add_button("Del No", VkKeyboardColor.NEGATIVE)
     kb.add_button("Del Hash", VkKeyboardColor.NEGATIVE)
     kb.add_button("Del ID", VkKeyboardColor.NEGATIVE)
     kb.add_line()
@@ -531,16 +529,6 @@ for ev in longpoll.listen():
         elif text == "List events":
             set_state(uid, STATE_LIST_MENU)
             send(uid, "Choose:", list_menu_kb())
-        elif text == "Del No":
-            events = read_events(uid)
-            if not events:
-                send(uid, "No events to delete.", main_menu_kb())
-            else:
-                clear_data(uid)
-                set_data(uid, "msgs", group_by_day(events))
-                set_data(uid, "offset", 0)
-                set_state(uid, STATE_DELETE)
-                send_batch(uid, "msgs", "offset")
         elif text == "Del Hash":
             events = read_events(uid)
             if not events:
@@ -844,32 +832,6 @@ for ev in longpoll.listen():
             send(uid, "Menu.", main_menu_kb())
         continue
 
-# ===== DELETE BY NUMBER =====
-    if state == STATE_DELETE:
-        if text == "Next":
-            send_batch(uid, "msgs", "offset")
-        else:
-            try:
-                idx = int(text) - 1
-                events = read_events(uid)
-
-                if 0 <= idx < len(events):
-                    removed = events.pop(idx)
-                    write_events(uid, events)
-                    rearrange(uid)
-
-                    send(uid, "You've deleted entry:")
-                    send(uid, removed)
-                    send(uid, "Done.", main_menu_kb())
-
-                else:
-                    send(uid, "Invalid number.", nav_kb(True))
-            except:
-                send(uid, "Enter number.", nav_kb(True))
-
-            clear_data(uid)
-            set_state(uid, STATE_START)
-        continue
 
 
 # ===== DELETE BY ARRAY =====
