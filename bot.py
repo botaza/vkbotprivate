@@ -55,7 +55,7 @@ STATE_COMPLETE = "complete"
 STATE_EDIT_DONE_SELECT = "edit_done_select"
 STATE_EDIT_DONE_INPUT = "edit_done_input"
 STATE_DELETE_DONE = "delete_done"
-
+STATE_DELETE_ARRAY = "delete_array"
 
 # ================= TOKEN =================
 with open(TOKEN_FILE, "r", encoding="utf-8") as f:
@@ -423,6 +423,7 @@ def main_menu_kb():
     kb.add_button("Complete", VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("List events", VkKeyboardColor.PRIMARY)
+    kb.add_button("Del Ar", VkKeyboardColor.NEGATIVE)
     kb.add_button("List completed", VkKeyboardColor.PRIMARY)
     kb.add_line()
     kb.add_button("Del No", VkKeyboardColor.NEGATIVE)
@@ -566,6 +567,20 @@ for ev in longpoll.listen():
                 set_data(uid, "offset", 0)
                 set_state(uid, STATE_EDIT_SELECT)
                 send_batch(uid, "msgs", "offset")
+
+
+        elif text == "Del Ar":
+            events = read_events(uid)
+            if not events:
+                send(uid, "No events to delete.", main_menu_kb())
+            else:
+                clear_data(uid)
+                set_data(uid, "msgs", group_by_day(events))
+                set_data(uid, "offset", 0)
+                set_state(uid, STATE_DELETE_ARRAY)
+                send(uid, "Send numbers separated by spaces (e.g. 1 3 5):")
+                send_batch(uid, "msgs", "offset")
+
 
         elif text == "Del C":
             events = read_done(uid)
@@ -850,6 +865,42 @@ for ev in longpoll.listen():
             clear_data(uid)
             set_state(uid, STATE_START)
         continue
+
+
+# ===== DELETE BY ARRAY =====
+    if state == STATE_DELETE_ARRAY:
+        if text == "Next":
+            send_batch(uid, "msgs", "offset")
+        else:
+            try:
+                numbers = sorted(
+                    {int(x) - 1 for x in text.split() if x.isdigit()},
+                    reverse=True
+                )
+
+                events = read_events(uid)
+                removed = []
+
+                for idx in numbers:
+                    if 0 <= idx < len(events):
+                        removed.append(events.pop(idx))
+
+                if not removed:
+                    send(uid, "No valid numbers.", nav_kb(True))
+                else:
+                    write_events(uid, events)
+                    rearrange(uid)
+
+                    send(uid, "Deleted:")
+                    send(uid, "\n".join(removed), main_menu_kb())
+
+            except:
+                send(uid, "Enter numbers separated by spaces.", nav_kb(True))
+
+            clear_data(uid)
+            set_state(uid, STATE_START)
+        continue
+
 
 
 # ===== COMPLETE EVENT =====
