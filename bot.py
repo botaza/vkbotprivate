@@ -116,6 +116,15 @@ def line_has_uid(line, uid_value):
     return uid_value in line.split()
 
 
+def extract_photos(ev):
+    photos = []
+    for att in ev.attachments:
+        if att["type"] == "photo":
+            p = att["photo"]
+            photos.append(f"photo{p['owner_id']}_{p['id']}")
+    return photos
+
+
 # ================= PLANNER =================
 def planner(uid):
     return os.path.join(PLANNER_DIR, f"{uid}plan.txt")
@@ -434,10 +443,11 @@ def place_kb():
 def main_menu_kb():
     kb = VkKeyboard(one_time=True)
     kb.add_button("Suggest events", VkKeyboardColor.POSITIVE)
+    kb.add_button("Del Ar", VkKeyboardColor.NEGATIVE)
     kb.add_button("Complete", VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("List events", VkKeyboardColor.PRIMARY)
-    kb.add_button("Del Ar", VkKeyboardColor.NEGATIVE)
+    kb.add_button("Send my photos", VkKeyboardColor.PRIMARY) 
     kb.add_button("List completed", VkKeyboardColor.PRIMARY)
     kb.add_line()
     kb.add_button("Del Hash", VkKeyboardColor.NEGATIVE)
@@ -492,13 +502,39 @@ def save_sent_reminders(data):
 sent_reminders = load_sent_reminders()
 
 
+
+# ================= PHOTOS =================
+def send_all_photos_with_desc(uid):
+    events = read_events(uid)
+    for line in events:
+        parsed = parse_event_line(line)
+        if not parsed:
+            continue
+        dt, desc, hashtag, uid_event, raw_line = parsed
+
+        # Check if there are photos
+        photo_part = raw_line.split("| photos:")
+        if len(photo_part) == 2:
+            photos = photo_part[1].split(",")
+            for p in photos:
+                # send one photo per message with its description
+                send(uid, desc, attachments=p)
+
+
 # ================= VK =================
 vk_session = vk_api.VkApi(token=TOKEN)
 vk = vk_session.get_api()
 longpoll = VkLongPoll(vk_session)
 
-def send(uid, text, kb=None):
-    vk.messages.send(user_id=uid, random_id=0, message=text, keyboard=kb)
+def send(uid, text, kb=None, attachments=None):
+    vk.messages.send(
+        user_id=uid,
+        random_id=int(time.time() * 1000),  # unique random_id
+        message=text,
+        keyboard=kb,
+        attachment=attachments  # use singular 'attachment' for one or comma-separated list
+    )
+
 
 # ================= MAIN LOOP =================
 threading.Thread(target=daily_digest_worker, daemon=True).start()
@@ -538,12 +574,23 @@ for ev in longpoll.listen():
     # ===== START MENU =====
     if state == STATE_START:
         if text == "Suggest events":
+            # Send current date first
+            today_str = datetime.now().date().isoformat()
+            send(uid, f"📅 Today: {today_str}")
+
+            # Continue with normal flow
             set_state(uid, STATE_SUGGEST_YEAR)
             clear_data(uid)
             send(uid, "Enter year (YYYY):", year_kb())
         elif text == "List events":
             set_state(uid, STATE_LIST_MENU)
             send(uid, "Choose:", list_menu_kb())
+
+        elif text == "Send my photos":
+            send_all_photos_with_desc(uid)
+            send(uid, "All photos sent", main_menu_kb())
+            continue
+
         elif text == "Del Hash":
             events = read_events(uid)
             if not events:
@@ -695,9 +742,15 @@ for ev in longpoll.listen():
     # ===== DESCRIPTION =====
     if state == STATE_SUGGEST_DESC:
         set_data(uid, "desc", text)
+
+        photos = extract_photos(ev)
+        if photos:
+            set_data(uid, "photos", photos)
+
         set_state(uid, STATE_SUGGEST_HASHTAG)
         send(uid, "Enter hashtag:")
         continue
+
 
     # ===== HASHTAG =====
     if state == STATE_SUGGEST_HASHTAG:
@@ -763,6 +816,7 @@ for ev in longpoll.listen():
         count = get_data(uid, "count")
         duration = get_data(uid, "duration")
         place = get_data(uid, "place", text)
+        photos = get_data(uid, "photos", [])
 
         base_dt = datetime(year, month, day, hour, minute)
         uid_event = next_uid(uid)
@@ -789,7 +843,12 @@ for ev in longpoll.listen():
             else:
                 dt = dt + i * delta_map.get(recurrence, timedelta())
 
-            line = f"{dt.isoformat()} {desc} {hashtag} {uid_event} {duration} {place}".strip()
+            photo_part = ""
+            if photos:
+                photo_part = " | photos:" + ",".join(photos)
+
+            line = f"{dt.isoformat()} {desc} {hashtag} {uid_event} {duration} {place}{photo_part}".strip()
+
             events_to_append.append(line)
 
         for e in events_to_append:
