@@ -55,6 +55,9 @@ STATE_EDIT_DONE_SELECT = "edit_done_select"
 STATE_EDIT_DONE_INPUT = "edit_done_input"
 STATE_DELETE_DONE = "delete_done"
 STATE_DELETE_ARRAY = "delete_array"
+STATE_QUICK_ADD = "quick_add"
+
+
 
 # ================= TOKEN =================
 with open(TOKEN_FILE, "r", encoding="utf-8") as f:
@@ -335,6 +338,12 @@ def group_by_day(events):
 
     return messages
 
+def send_today_with_weekday(uid):
+    now = datetime.now()
+    msg = now.strftime("Today: %Y-%m-%d (%A)")
+    send(uid, msg)
+
+
 
 # ================= PAGINATION =================
 def send_batch(uid, key_msgs, key_offset):
@@ -434,6 +443,7 @@ def place_kb():
 def main_menu_kb():
     kb = VkKeyboard(one_time=True)
     kb.add_button("Suggest events", VkKeyboardColor.POSITIVE)
+    kb.add_button("Quick note", VkKeyboardColor.POSITIVE)
     kb.add_button("Complete", VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("List events", VkKeyboardColor.PRIMARY)
@@ -538,9 +548,17 @@ for ev in longpoll.listen():
     # ===== START MENU =====
     if state == STATE_START:
         if text == "Suggest events":
-            set_state(uid, STATE_SUGGEST_YEAR)
             clear_data(uid)
+            send_today_with_weekday(uid)
+            set_state(uid, STATE_SUGGEST_YEAR)
             send(uid, "Enter year (YYYY):", year_kb())
+
+
+        elif text == "Quick note":
+            clear_data(uid)
+            set_state(uid, STATE_QUICK_ADD)
+            send(uid, "Send text to save:")
+
         elif text == "List events":
             set_state(uid, STATE_LIST_MENU)
             send(uid, "Choose:", list_menu_kb())
@@ -1001,6 +1019,14 @@ for ev in longpoll.listen():
         continue
 
 
+
+    if state == STATE_QUICK_ADD:
+        append_event(uid, text)
+        clear_data(uid)
+        set_state(uid, STATE_START)
+        send(uid, "Saved.", main_menu_kb())
+
+
 # ===== EDIT =====
     if state == STATE_EDIT_SELECT:
         if text == "Next":
@@ -1033,3 +1059,6 @@ for ev in longpoll.listen():
             send(uid, "Edit failed.", main_menu_kb())
         clear_data(uid)
         set_state(uid, STATE_START)
+
+
+
