@@ -345,6 +345,48 @@ def send_today_with_weekday(uid):
 
 
 
+
+def save_photos(uid, message_id):
+    """
+    Fetch message attachments and save photos along with their text description.
+    After saving, shows main menu.
+    """
+    user_folder = "user_photos"
+    os.makedirs(user_folder, exist_ok=True)
+    photo_file = os.path.join(user_folder, f"{uid}photo.txt")
+
+    try:
+        msg_data = vk.messages.getById(message_ids=message_id)["items"][0]
+        atts = msg_data.get("attachments", [])
+        saved_any = False
+
+        # Text of the message (description)
+        text_desc = msg_data.get("text", "").strip()
+
+        for att in atts:
+            if att.get("type") == "photo":
+                photo = att["photo"]
+                # Build attachment string with access_key if needed
+                attach_str = f'photo{photo["owner_id"]}_{photo["id"]}'
+                access_key = photo.get("access_key")
+                if access_key:
+                    attach_str += f'_{access_key}'
+
+                # Save as: attachment||description
+                with open(photo_file, "a", encoding="utf-8") as f:
+                    f.write(f"{attach_str}||{text_desc}\n")
+
+                saved_any = True
+
+        if saved_any:
+            send(uid, "Saved your photo(s) with description.", main_menu_kb())
+        else:
+            send(uid, "No photos found in your message.", main_menu_kb())
+
+    except Exception as e:
+        log.error(f"Failed to save photos for {uid}: {e}")
+        send(uid, "Error while saving photos.", main_menu_kb())
+
 # ================= PAGINATION =================
 def send_batch(uid, key_msgs, key_offset):
     data = user(uid)["data"]
@@ -502,6 +544,50 @@ def save_sent_reminders(data):
 sent_reminders = load_sent_reminders()
 
 
+
+# ===== PHOTO RETRIEVAL =====
+
+
+def send_photos(uid):
+    """
+    Send saved photos one by one, with their description text above each photo.
+    After sending all, show main menu.
+    """
+    photo_file = os.path.join("user_photos", f"{uid}photo.txt")
+    if not os.path.exists(photo_file):
+        send(uid, "You have no saved photos.", main_menu_kb())
+        return
+
+    with open(photo_file, "r", encoding="utf-8") as f:
+        lines = [line.strip() for line in f if line.strip()]
+
+    if not lines:
+        send(uid, "You have no saved photos.", main_menu_kb())
+        return
+
+    for idx, line in enumerate(lines, start=1):
+        if "||" in line:
+            attach_str, desc = line.split("||", 1)
+        else:
+            attach_str = line
+            desc = ""
+
+        # Send the description first, if it exists
+        if desc:
+            send(uid, f"Photo {idx}:\n{desc}")
+
+        # Then send the photo
+        vk.messages.send(
+            user_id=uid,
+            random_id=0,
+            message="",  # empty text
+            attachment=attach_str
+        )
+
+    # After all photos, send main menu
+    send(uid, "Menu:", main_menu_kb())
+
+
 # ================= VK =================
 vk_session = vk_api.VkApi(token=TOKEN)
 vk = vk_session.get_api()
@@ -526,11 +612,23 @@ for ev in longpoll.listen():
     state = u["state"]
     log.info(f"{uid} | {state} | {text}")
 
+
+    # ===== PHOTO HANDLING =====
+    if getattr(ev, "attachments", None):
+        save_photos(uid, ev.message_id)
+
+
+
     # ===== GLOBAL COMMANDS =====
     if text.lower() == "/reset":
         clear_data(uid)
         set_state(uid, STATE_START)
         send(uid, "Reset.", main_menu_kb())
+        continue
+
+
+    if text.lower() == "/pics":
+        send_photos(uid)
         continue
 
     if text.lower() == "/rearrange":
