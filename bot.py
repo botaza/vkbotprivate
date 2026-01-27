@@ -56,6 +56,7 @@ STATE_EDIT_DONE_INPUT = "edit_done_input"
 STATE_DELETE_DONE = "delete_done"
 STATE_DELETE_ARRAY = "delete_array"
 STATE_QUICK_ADD = "quick_add"
+STATE_DELETE_PHOTOS = "delete_photos"
 
 
 
@@ -493,6 +494,7 @@ def main_menu_kb():
     kb.add_button("List completed", VkKeyboardColor.PRIMARY)
     kb.add_line()
     kb.add_button("Del Hash", VkKeyboardColor.NEGATIVE)
+    kb.add_button("Del P", VkKeyboardColor.NEGATIVE)
     kb.add_button("Del ID", VkKeyboardColor.NEGATIVE)
     kb.add_line()
     kb.add_button("Edit event", VkKeyboardColor.SECONDARY)
@@ -586,6 +588,17 @@ def send_photos(uid):
 
     # After all photos, send main menu
     send(uid, "Menu:", main_menu_kb())
+
+
+
+
+
+def read_photo_entries(uid):
+    path = os.path.join("user_photos", f"{uid}photo.txt")
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        return [l.rstrip() for l in f if l.strip()]
 
 
 # ================= VK =================
@@ -735,6 +748,31 @@ for ev in longpoll.listen():
                 set_data(uid, "offset", 0)
                 set_state(uid, STATE_COMPLETE)
                 send_batch(uid, "msgs", "offset")
+
+
+        elif text == "Del P":
+            photo_file = os.path.join("user_photos", f"{uid}photo.txt")
+
+            if not os.path.exists(photo_file):
+                send(uid, "No saved photo entries.", main_menu_kb())
+            else:
+                with open(photo_file, "r", encoding="utf-8") as f:
+                    entries = [l.rstrip() for l in f if l.strip()]
+
+                if not entries:
+                    send(uid, "No saved photo entries.", main_menu_kb())
+                else:
+                    clear_data(uid)
+                    set_data(uid, "photo_entries", entries)
+                    set_state(uid, STATE_DELETE_PHOTOS)
+
+                    send(uid, "Saved photo entries:")
+                    for i, line in enumerate(entries, start=1):
+                        desc = line.split("||", 1)[1] if "||" in line else ""
+                        send(uid, f"{i}. {desc or '[no description]'}")
+
+                    send(uid, "Send numbers separated by spaces (e.g. 1 3 5):")
+
 
 
         elif text == "List completed":
@@ -1144,6 +1182,45 @@ for ev in longpoll.listen():
             except:
                 send(uid, "Enter number.", nav_kb(True))
         continue
+
+    if state == STATE_DELETE_PHOTOS:
+        try:
+            numbers = sorted(
+                {int(x) - 1 for x in text.split() if x.isdigit()},
+                reverse=True
+            )
+
+            entries = get_data(uid, "photo_entries", [])
+            removed = []
+
+            for idx in numbers:
+                if 0 <= idx < len(entries):
+                    removed.append(entries.pop(idx))
+
+            if not removed:
+                send(uid, "No valid numbers.", main_menu_kb())
+            else:
+                photo_file = os.path.join("user_photos", f"{uid}photo.txt")
+                with open(photo_file, "w", encoding="utf-8") as f:
+                    for e in entries:
+                        f.write(e + "\n")
+
+                send(uid, "You've deleted photo entries:")
+                for r in removed:
+                    desc = r.split("||", 1)[1] if "||" in r else ""
+                    send(uid, desc or "[no description]")
+
+                send(uid, "Done.", main_menu_kb())
+
+        except Exception as e:
+            log.error(f"Photo delete failed for {uid}: {e}")
+            send(uid, "Enter numbers separated by spaces.", main_menu_kb())
+
+        clear_data(uid)
+        set_state(uid, STATE_START)
+        continue
+
+
 
     if state == STATE_EDIT_INPUT:
         idx = get_data(uid, "edit_idx")
