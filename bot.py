@@ -392,10 +392,18 @@ def save_photos(uid, message_id):
 
 
 def days_per_month_message(year: int) -> str:
+    now = datetime.now()
+    current_year = now.year
+    current_month = now.month
+
     lines = [f"📅 Days per month for {year}:"]
+
     for m in range(1, 13):
         days = calendar.monthrange(year, m)[1]
-        lines.append(f"{m:02d}: {days} days")
+
+        tick = " ✔" if (year == current_year and m == current_month) else ""
+        lines.append(f"{m:02d}: {days} days{tick}")
+
     return "\n".join(lines)
 
 
