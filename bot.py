@@ -4,6 +4,7 @@ from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 from datetime import datetime, timedelta
 import os, json, logging
 import threading
+import calendar
 import time
 import re
 
@@ -387,6 +388,16 @@ def save_photos(uid, message_id):
     except Exception as e:
         log.error(f"Failed to save photos for {uid}: {e}")
         send(uid, "Error while saving photos.", main_menu_kb())
+
+
+
+def days_per_month_message(year: int) -> str:
+    lines = [f"📅 Days per month for {year}:"]
+    for m in range(1, 13):
+        days = calendar.monthrange(year, m)[1]
+        lines.append(f"{m:02d}: {days} days")
+    return "\n".join(lines)
+
 
 # ================= PAGINATION =================
 def send_batch(uid, key_msgs, key_offset):
@@ -811,10 +822,14 @@ for ev in longpoll.listen():
         if text.isdigit() and 1 <= int(text) <= 12:
             set_data(uid, "month", int(text))
             set_state(uid, STATE_SUGGEST_DAY)
-            send(uid, "Enter day (1-31):", day_kb())
+
+            year = get_data(uid, "year")
+            send(uid, days_per_month_message(year))
+            send(uid, "Enter day:", day_kb())
         else:
             send(uid, "Invalid month. Enter 1-12:", month_kb())
         continue
+
 
     # ===== DAY =====
     if state == STATE_SUGGEST_DAY:
