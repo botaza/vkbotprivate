@@ -407,6 +407,37 @@ def days_per_month_message(year: int) -> str:
     return "\n".join(lines)
 
 
+def two_month_calendar_message():
+    from datetime import datetime
+    import calendar
+
+    today = datetime.now().date()
+    calendar.setfirstweekday(calendar.MONDAY)
+
+    def render_month(year, month):
+        lines = [f"📆 {calendar.month_name[month]} {year}"]
+        for week in calendar.monthcalendar(year, month):
+            cells = []
+            for d in week:
+                if d == 0:
+                    cells.append("  ")
+                elif d == today.day and month == today.month and year == today.year:
+                    cells.append(f"[{d:02}]")
+                else:
+                    cells.append(f"{d:02}")
+            lines.append("Mo " + " ".join(cells) + " Su")
+        return lines
+
+    y, m = today.year, today.month
+    ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+
+    output = []
+    output.extend(render_month(y, m))
+    output.append("")
+    output.extend(render_month(ny, nm))
+
+    return "\n".join(output)
+
 # ================= PAGINATION =================
 def send_batch(uid, key_msgs, key_offset):
     data = user(uid)["data"]
@@ -679,7 +710,14 @@ for ev in longpoll.listen():
     if state == STATE_START:
         if text == "Suggest events":
             clear_data(uid)
+
+            # send current date
             send_today_with_weekday(uid)
+
+            # send calendar for current + next month (separate message)
+            send(uid, two_month_calendar_message())
+
+            # continue normal suggest flow
             set_state(uid, STATE_SUGGEST_YEAR)
             send(uid, "Enter year (YYYY):", year_kb())
 
