@@ -632,7 +632,7 @@ def send_photos(uid):
         vk.messages.send(
             user_id=uid,
             random_id=0,
-            message="",  # empty text
+            message=".",
             attachment=attach_str
         )
 
@@ -656,8 +656,18 @@ vk_session = vk_api.VkApi(token=TOKEN)
 vk = vk_session.get_api()
 longpoll = VkLongPoll(vk_session)
 
+
 def send(uid, text, kb=None):
-    vk.messages.send(user_id=uid, random_id=0, message=text, keyboard=kb)
+    if not text:
+        text = "."
+    vk.messages.send(
+        user_id=uid,
+        random_id=0,
+        message=text,
+        keyboard=kb
+    )
+
+
 
 # ================= MAIN LOOP =================
 threading.Thread(target=daily_digest_worker, daemon=True).start()
