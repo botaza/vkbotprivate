@@ -58,6 +58,7 @@ STATE_DELETE_DONE = "delete_done"
 STATE_DELETE_ARRAY = "delete_array"
 STATE_QUICK_ADD = "quick_add"
 STATE_DELETE_PHOTOS = "delete_photos"
+STATE_DATE_QUERY = "date_query"
 
 
 
@@ -197,6 +198,23 @@ def daily_digest_worker():
 
             time.sleep(61)  # prevent double fire
         time.sleep(20)
+
+
+def events_for_date(uid, target_date):
+    events = read_events(uid)
+    matched = []
+
+    for line in events:
+        parsed = parse_event_line(line)
+        if not parsed:
+            continue
+
+        dt, _, _, _, raw = parsed
+        if dt.date() == target_date:
+            matched.append(raw)
+
+    return matched
+
 
 
 def hourly_reminder_worker():
@@ -656,6 +674,13 @@ for ev in longpoll.listen():
         send(uid, "Reset.", main_menu_kb())
         continue
 
+    if text.lower() == "/date":
+        clear_data(uid)
+        set_state(uid, STATE_DATE_QUERY)
+        send(uid, "📅 Enter date in format YYYY-MM-DD:")
+        continue
+
+
 
     if text.lower() == "/pics":
         send_photos(uid)
@@ -1027,6 +1052,28 @@ for ev in longpoll.listen():
             clear_data(uid)
             set_state(uid, STATE_START)
             send(uid, "Menu.", main_menu_kb())
+        continue
+
+
+    if state == STATE_DATE_QUERY:
+        try:
+            target_date = datetime.strptime(text, "%Y-%m-%d").date()
+        except ValueError:
+            send(uid, "❌ Invalid format. Please use YYYY-MM-DD:")
+            continue
+
+        matches = events_for_date(uid, target_date)
+
+        if not matches:
+            send(uid, f"No events for {target_date}.")
+        else:
+            send(uid, f"📅 Events for {target_date}:")
+            for line in matches:
+                send(uid, line)
+
+        clear_data(uid)
+        set_state(uid, STATE_START)
+        send(uid, "Menu:", main_menu_kb())
         continue
 
 
