@@ -383,7 +383,10 @@ def save_photos(uid, message_id, peer_id):
     send(uid, "Saved photo reference.", main_menu_kb())
 
 
-def days_per_month_message(year: int) -> str:
+def days_per_month_message(
+    year: int,
+    selected_month: int | None = None
+) -> str:
     now = datetime.now()
     current_year = now.year
     current_month = now.month
@@ -393,10 +396,16 @@ def days_per_month_message(year: int) -> str:
     for m in range(1, 13):
         days = calendar.monthrange(year, m)[1]
 
-        tick = " ✔" if (year == current_year and m == current_month) else ""
-        lines.append(f"{m:02d}: {days} days{tick}")
+        marks = ""
+        if year == current_year and m == current_month:
+            marks += " ✔"
+        if selected_month == m:
+            marks += " 🎯"
+
+        lines.append(f"{m:02d}: {days} days{marks}")
 
     return "\n".join(lines)
+
 
 
 def two_month_calendar_message():
@@ -880,7 +889,8 @@ for ev in longpoll.listen():
             set_state(uid, STATE_SUGGEST_DAY)
 
             year = get_data(uid, "year")
-            send(uid, days_per_month_message(year))
+            month = get_data(uid, "month")
+            send(uid, days_per_month_message(year, month))
             send(uid, "Enter day:", day_kb())
         else:
             send(uid, "Invalid month. Enter 1-12:", month_kb())
