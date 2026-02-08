@@ -59,6 +59,7 @@ STATE_DELETE_ARRAY = "delete_array"
 STATE_QUICK_ADD = "quick_add"
 STATE_DELETE_PHOTOS = "delete_photos"
 STATE_DATE_QUERY = "date_query"
+STATE_NUMBER_QUERY = "number_query"
 
 
 
@@ -668,6 +669,18 @@ for ev in longpoll.listen():
 
 
     # ===== GLOBAL COMMANDS =====
+    if text.strip() == "/":
+        commands_list = [
+            "/reset — Reset bot state",
+            "/date — Query events by date",
+            "/number — Search events by text",
+            "/pics — Show saved photos",
+            "/rearrange — Rearrange your planner events"
+        ]
+        send(uid, "📖 Available commands:\n" + "\n".join(commands_list))
+        continue
+
+
     if text.lower() == "/reset":
         clear_data(uid)
         set_state(uid, STATE_START)
@@ -679,6 +692,12 @@ for ev in longpoll.listen():
         set_state(uid, STATE_DATE_QUERY)
         send(uid, "📅 Enter date in format YYYY-MM-DD:")
         continue
+
+
+    if text.lower() == "/number":
+        clear_data(uid)
+        set_state(uid, STATE_NUMBER_QUERY)
+        send(uid, "Enter a text to search for in your planner:")
 
 
 
@@ -773,7 +792,6 @@ for ev in longpoll.listen():
                 set_data(uid, "offset", 0)
                 set_state(uid, STATE_DELETE_DONE)
                 send_batch(uid, "msgs", "offset")
-
 
         elif text == "Edit completed":
             events = read_done(uid)
@@ -1236,6 +1254,36 @@ for ev in longpoll.listen():
         clear_data(uid)
         set_state(uid, STATE_START)
         send(uid, "Saved.", main_menu_kb())
+
+
+    if state == STATE_NUMBER_QUERY:
+        query = text.strip()
+
+        events = read_events(uid)
+        found = []
+
+        for idx, line in enumerate(events):
+            parsed = parse_event_line(line)
+            if not parsed:
+                continue
+
+            dt, desc, _, _, raw = parsed
+
+            if query in desc:
+                line_no = idx + 1
+                weekday = dt.strftime("%A")
+                found.append((line_no, weekday, raw))
+
+        if not found:
+            send(uid, "No matches found.")
+        else:
+            send(uid, "🔎 Matches in planner (absolute line numbers):")
+            for line_no, weekday, raw in found:
+                send(uid, f"#{line_no} | {weekday}\n{raw}")
+
+        clear_data(uid)
+        set_state(uid, STATE_START)
+        send(uid, "Menu:", main_menu_kb())
 
 
 # ===== EDIT =====
