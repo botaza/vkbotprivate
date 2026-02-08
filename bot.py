@@ -2,6 +2,7 @@ import vk_api
 from vk_api.longpoll import VkLongPoll, VkEventType
 from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 from datetime import datetime, timedelta
+from typing import Optional
 import os, json, logging
 import threading
 import calendar
@@ -385,7 +386,7 @@ def save_photos(uid, message_id, peer_id):
 
 def days_per_month_message(
     year: int,
-    selected_month: int | None = None
+    selected_month: Optional[int] = None
 ) -> str:
     now = datetime.now()
     current_year = now.year
