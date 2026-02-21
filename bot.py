@@ -692,17 +692,22 @@ for ev in longpoll.listen():
 
     # ===== GLOBAL COMMANDS =====
     if text.strip() == "/":
-        commands_list = [
-            "/reset — Reset bot state",
-            "/date — Query events by date",
-            "/number — Search events by text",
-            "/pics — Show saved photos",
-            "/rearrange — Rearrange your planner events",
-            "/today — Show today's events"
-            "/extend — Extend existing event"
+        commands = [
+            ("/reset", "Reset bot state"),
+            ("/date", "Query events by date"),
+            ("/number", "Search events by text"),
+            ("/pics", "Show saved photos"),
+            ("/rearrange", "Rearrange your planner events"),
+            ("/today", "Show today's events"),
+            ("/extend", "Extend existing event")
         ]
 
-        send(uid, "📖 Available commands:\n" + "\n".join(commands_list))
+        send(uid, "📖 Available commands:")
+
+        for cmd, desc in commands:
+            send(uid, cmd)
+            send(uid, desc)
+
         continue
 
 
