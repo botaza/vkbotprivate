@@ -61,7 +61,8 @@ STATE_QUICK_ADD = "quick_add"
 STATE_DELETE_PHOTOS = "delete_photos"
 STATE_DATE_QUERY = "date_query"
 STATE_NUMBER_QUERY = "number_query"
-
+STATE_EXTEND_SELECT = "extend_select"
+STATE_EXTEND_PERIOD = "extend_period"
 
 
 # ================= TOKEN =================
@@ -582,6 +583,17 @@ def recurrence_kb():
     return kb.get_keyboard()
 
 
+def extend_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("Weekly", VkKeyboardColor.PRIMARY)
+    kb.add_button("Biweekly", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("Monthly", VkKeyboardColor.PRIMARY)
+    kb.add_button("Annually", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
 def load_sent_reminders():
     if not os.path.exists(REMINDER_FILE):
         return {}
@@ -685,8 +697,11 @@ for ev in longpoll.listen():
             "/date — Query events by date",
             "/number — Search events by text",
             "/pics — Show saved photos",
-            "/rearrange — Rearrange your planner events"
+            "/rearrange — Rearrange your planner events",
+            "/today — Show today's events"
+            "/extend — Extend existing event"
         ]
+
         send(uid, "📖 Available commands:\n" + "\n".join(commands_list))
         continue
 
@@ -709,6 +724,41 @@ for ev in longpoll.listen():
         set_state(uid, STATE_NUMBER_QUERY)
         send(uid, "Enter a text to search for in your planner:")
 
+
+    if text.lower() == "/extend":
+        events = read_events(uid)
+        if not events:
+            send(uid, "No events to extend.", main_menu_kb())
+        else:
+            clear_data(uid)
+            set_data(uid, "msgs", group_by_day(events))
+            set_data(uid, "offset", 0)
+            set_state(uid, STATE_EXTEND_SELECT)
+            send(uid, "Select event number to extend:")
+            send_batch(uid, "msgs", "offset")
+        continue
+
+
+    if text.lower() == "/today":
+        today = datetime.now().date()
+        weekday = datetime.now().strftime("%A")
+
+        # Opening message
+        send(uid, f"📅 Today: {today} ({weekday})")
+
+        matches = events_for_date(uid, today)
+
+        if not matches:
+            send(uid, "No events for today.")
+        else:
+            send(uid, "Today's events:")
+            for line in matches:
+                send(uid, line)
+
+        clear_data(uid)
+        set_state(uid, STATE_START)
+        send(uid, "Menu:", main_menu_kb())
+        continue
 
 
     if text.lower() == "/pics":
@@ -825,6 +875,9 @@ for ev in longpoll.listen():
                 set_data(uid, "offset", 0)
                 set_state(uid, STATE_COMPLETE)
                 send_batch(uid, "msgs", "offset")
+
+
+
 
 
         elif text == "Del P":
@@ -967,6 +1020,88 @@ for ev in longpoll.listen():
 
         continue
 
+
+    if state == STATE_EXTEND_SELECT:
+        if text == "Next":
+            send_batch(uid, "msgs", "offset")
+        else:
+            try:
+                idx = int(text) - 1
+                events = read_events(uid)
+
+                if 0 <= idx < len(events):
+                    set_data(uid, "extend_idx", idx)
+                    set_state(uid, STATE_EXTEND_PERIOD)
+                    send(uid, "Select extension period:", extend_kb())
+                else:
+                    send(uid, "Invalid number.", nav_kb(True))
+            except:
+                send(uid, "Enter number.", nav_kb(True))
+        continue
+
+
+
+    if state == STATE_EXTEND_PERIOD:
+
+        period_map = {
+            "Weekly": timedelta(days=7),
+            "Biweekly": timedelta(days=14),
+            "Monthly": "monthly",
+            "Annually": "yearly"
+        }
+
+        if text not in period_map:
+            send(uid, "Select extension period:", extend_kb())
+            continue
+
+        idx = get_data(uid, "extend_idx")
+        events = read_events(uid)
+
+        if idx is None or not (0 <= idx < len(events)):
+            send(uid, "Extension failed.", main_menu_kb())
+            clear_data(uid)
+            set_state(uid, STATE_START)
+            continue
+
+        original_line = events.pop(idx)
+
+        parsed = parse_event_line(original_line)
+        if not parsed:
+            send(uid, "Failed parsing event.", main_menu_kb())
+            clear_data(uid)
+            set_state(uid, STATE_START)
+            continue
+
+        dt, desc_text, hashtag, uid_event, _ = parsed
+
+        period = period_map[text]
+
+        if period == "monthly":
+            month_new = dt.month + 1
+            year_new = dt.year + (month_new - 1) // 12
+            month_new = (month_new - 1) % 12 + 1
+            new_dt = dt.replace(year=year_new, month=month_new)
+        elif period == "yearly":
+            new_dt = dt.replace(year=dt.year + 1)
+        else:
+            new_dt = dt + period
+
+        # rebuild full line preserving tail after datetime
+        tail = original_line.split(" ", 1)[1]
+        new_line = f"{new_dt.isoformat()} {tail}"
+
+        events.append(new_line)
+        write_events(uid, events)
+        rearrange(uid)
+
+        send(uid, "✅ Your event got extended.")
+        send(uid, f"📅 It was rewritten to new date: {new_dt.date()}")
+        send(uid, f"New entry:\n{new_line}")
+
+        clear_data(uid)
+        set_state(uid, STATE_START)
+        send(uid, "Menu:", main_menu_kb())
+        continue
 
 
     # ===== COUNT =====
