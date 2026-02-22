@@ -1074,7 +1074,7 @@ for ev in longpoll.listen():
             else:
                 clear_data(uid)
                 set_state(uid, STATE_FILTER)
-                send(uid, "Enter hashtag to filter (e.g., #event, #pers, #control):")
+                send(uid, "Enter hashtag to filter (e.g., event, pers, control):")
         else:
             send(uid, "Choose list type:", list_menu_main_kb())
         continue
@@ -1330,10 +1330,9 @@ for ev in longpoll.listen():
     # ===== FILTER =====
     if state == STATE_FILTER:
         tag = text.strip()
-        if not tag.startswith('#'):
-            tag = '#' + tag
-        tag_lower = tag.lower()
-        events = [e for e in read_events(uid) if tag_lower in e.lower()]
+        if tag.startswith('#'):
+            tag = tag[1:]
+        events = [e for e in read_events(uid) if tag in e.lower()]
         if not events:
             send(uid, f"No matches for {tag}.", main_menu_kb())
             set_state(uid, STATE_START)
