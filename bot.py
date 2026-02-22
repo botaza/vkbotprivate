@@ -63,7 +63,9 @@ STATE_DATE_QUERY = "date_query"
 STATE_NUMBER_QUERY = "number_query"
 STATE_EXTEND_SELECT = "extend_select"
 STATE_EXTEND_PERIOD = "extend_period"
-
+STATE_DELETE_MENU = "delete_menu"
+STATE_LIST_MAIN_MENU = "list_main_menu"
+STATE_EDIT_MENU = "edit_menu"
 
 # ================= TOKEN =================
 with open(TOKEN_FILE, "r", encoding="utf-8") as f:
@@ -557,23 +559,44 @@ def place_kb():
     return kb.get_keyboard()
 
 # ================= EXISTING KEYBOARDS =================
+def delete_menu_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("Del P", VkKeyboardColor.NEGATIVE)      # Photos
+    kb.add_button("Del Hash", VkKeyboardColor.NEGATIVE)   # By hashtag
+    kb.add_button("Del ID", VkKeyboardColor.NEGATIVE)     # By UID
+    kb.add_line()
+    kb.add_button("Del Ar", VkKeyboardColor.NEGATIVE)     # By array/numbers
+    kb.add_button("Del C", VkKeyboardColor.NEGATIVE)      # Completed
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def list_menu_main_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("List events", VkKeyboardColor.PRIMARY)
+    kb.add_button("List completed", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def edit_menu_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("Edit event", VkKeyboardColor.SECONDARY)
+    kb.add_button("Edit completed", VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+
 def main_menu_kb():
     kb = VkKeyboard(one_time=True)
     kb.add_button("Suggest events", VkKeyboardColor.POSITIVE)
     kb.add_button("Quick note", VkKeyboardColor.POSITIVE)
     kb.add_button("Complete", VkKeyboardColor.POSITIVE)
     kb.add_line()
-    kb.add_button("List events", VkKeyboardColor.PRIMARY)
-    kb.add_button("Del Ar", VkKeyboardColor.NEGATIVE)
-    kb.add_button("List completed", VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button("Del Hash", VkKeyboardColor.NEGATIVE)
-    kb.add_button("Del P", VkKeyboardColor.NEGATIVE)
-    kb.add_button("Del ID", VkKeyboardColor.NEGATIVE)
-    kb.add_line()
-    kb.add_button("Edit event", VkKeyboardColor.SECONDARY)
-    kb.add_button("Del C", VkKeyboardColor.NEGATIVE)
-    kb.add_button("Edit completed", VkKeyboardColor.SECONDARY)
+    kb.add_button("List", VkKeyboardColor.PRIMARY)      # ← submenu
+    kb.add_button("Delete", VkKeyboardColor.NEGATIVE)   # ← submenu
+    kb.add_button("Edit", VkKeyboardColor.SECONDARY)    # ← submenu
     return kb.get_keyboard()
 
 
@@ -691,26 +714,17 @@ def send(uid, text, kb=None):
 threading.Thread(target=daily_digest_worker, daemon=True).start()
 threading.Thread(target=hourly_reminder_worker, daemon=True).start()
 threading.Thread(target=daily_hashtag_reminder_worker, daemon=True).start()
-
-
 for ev in longpoll.listen():
     if ev.type != VkEventType.MESSAGE_NEW or not ev.to_me:
         continue
-
     uid = ev.user_id
     text = ev.text.strip()
     u = user(uid)
     state = u["state"]
     log.info(f"{uid} | {state} | {text}")
-
-
     # ===== PHOTO HANDLING =====
     if getattr(ev, "attachments", None):
         save_photos(uid, ev.message_id, ev.peer_id)
-
-
-
-
     # ===== GLOBAL COMMANDS =====
     if text.strip() == "/":
         commands = [
@@ -722,35 +736,25 @@ for ev in longpoll.listen():
             ("/today", "Show today's events"),
             ("/extend", "Extend existing event")
         ]
-
         send(uid, "📖 Available commands:")
-
         for cmd, desc in commands:
             send(uid, cmd)
             send(uid, desc)
-
         continue
-
-
     if text.lower() == "/reset":
         clear_data(uid)
         set_state(uid, STATE_START)
         send(uid, "Reset.", main_menu_kb())
         continue
-
     if text.lower() == "/date":
         clear_data(uid)
         set_state(uid, STATE_DATE_QUERY)
         send(uid, "📅 Enter date in format YYYY-MM-DD:")
         continue
-
-
     if text.lower() == "/number":
         clear_data(uid)
         set_state(uid, STATE_NUMBER_QUERY)
         send(uid, "Enter a text to search for in your planner:")
-
-
     if text.lower() == "/extend":
         events = read_events(uid)
         if not events:
@@ -763,67 +767,50 @@ for ev in longpoll.listen():
             send(uid, "Select event number to extend:")
             send_batch(uid, "msgs", "offset")
         continue
-
-
     if text.lower() == "/today":
         today = datetime.now().date()
         weekday = datetime.now().strftime("%A")
-
         # Opening message
         send(uid, f"📅 Today: {today} ({weekday})")
-
         matches = events_for_date(uid, today)
-
         if not matches:
             send(uid, "No events for today.")
         else:
             send(uid, "Today's events:")
             for line in matches:
                 send(uid, line)
-
         clear_data(uid)
         set_state(uid, STATE_START)
         send(uid, "Menu:", main_menu_kb())
         continue
-
-
     if text.lower() == "/pics":
         send_photos(uid)
         continue
-
     if text.lower() == "/rearrange":
         rearrange(uid)
         send(uid, "Rearranged.", main_menu_kb())
         continue
-
     # ===== BACK TO MENU (GLOBAL) =====
     if text == "Back to menu":
         clear_data(uid)
         set_state(uid, STATE_START)
         send(uid, "Menu:", main_menu_kb())
         continue
-
     # ===== START MENU =====
     if state == STATE_START:
         if text == "Suggest events":
             clear_data(uid)
-
             # send current date
             send_today_with_weekday(uid)
-
             # send calendar for current + next month (separate message)
             send(uid, two_month_calendar_message())
-
             # continue normal suggest flow
             set_state(uid, STATE_SUGGEST_YEAR)
             send(uid, "Enter year (YYYY):", year_kb())
-
-
         elif text == "Quick note":
             clear_data(uid)
             set_state(uid, STATE_QUICK_ADD)
             send(uid, "Send text to save:")
-
         elif text == "List events":
             set_state(uid, STATE_LIST_MENU)
             send(uid, "Choose:", list_menu_kb())
@@ -853,8 +840,6 @@ for ev in longpoll.listen():
                 set_data(uid, "offset", 0)
                 set_state(uid, STATE_EDIT_SELECT)
                 send_batch(uid, "msgs", "offset")
-
-
         elif text == "Del Ar":
             events = read_events(uid)
             if not events:
@@ -866,8 +851,6 @@ for ev in longpoll.listen():
                 set_state(uid, STATE_DELETE_ARRAY)
                 send(uid, "Send numbers separated by spaces (e.g. 1 3 5):")
                 send_batch(uid, "msgs", "offset")
-
-
         elif text == "Del C":
             events = read_done(uid)
             if not events:
@@ -878,7 +861,6 @@ for ev in longpoll.listen():
                 set_data(uid, "offset", 0)
                 set_state(uid, STATE_DELETE_DONE)
                 send_batch(uid, "msgs", "offset")
-
         elif text == "Edit completed":
             events = read_done(uid)
             if not events:
@@ -889,8 +871,6 @@ for ev in longpoll.listen():
                 set_data(uid, "offset", 0)
                 set_state(uid, STATE_EDIT_DONE_SELECT)
                 send_batch(uid, "msgs", "offset")
-
-
         elif text == "Complete":
             events = read_events(uid)
             if not events:
@@ -901,36 +881,24 @@ for ev in longpoll.listen():
                 set_data(uid, "offset", 0)
                 set_state(uid, STATE_COMPLETE)
                 send_batch(uid, "msgs", "offset")
-
-
-
-
-
         elif text == "Del P":
             photo_file = os.path.join("user_photos", f"{uid}photo.txt")
-
             if not os.path.exists(photo_file):
                 send(uid, "No saved photo entries.", main_menu_kb())
             else:
                 with open(photo_file, "r", encoding="utf-8") as f:
                     entries = [l.rstrip() for l in f if l.strip()]
-
                 if not entries:
                     send(uid, "No saved photo entries.", main_menu_kb())
                 else:
                     clear_data(uid)
                     set_data(uid, "photo_entries", entries)
                     set_state(uid, STATE_DELETE_PHOTOS)
-
                     send(uid, "Saved photo entries:")
                     for i, line in enumerate(entries, start=1):
                         desc = line.split("||", 1)[1] if "||" in line else ""
                         send(uid, f"{i}. {desc or '[no description]'}")
-
                     send(uid, "Send numbers separated by spaces (e.g. 1 3 5):")
-
-
-
         elif text == "List completed":
             events = read_done(uid)
             if not events:
@@ -941,17 +909,11 @@ for ev in longpoll.listen():
                 set_data(uid, "offset", 0)
                 set_state(uid, STATE_LIST_VIEW)
                 send_batch(uid, "msgs", "offset")
-
-
         else:
             send(uid, "Menu:", main_menu_kb())
         continue
-
-
-
-# ===== Suggest Event flow continues in Part 3 =====
-# ================= SUGGEST EVENT FLOW =================
-
+    # ===== Suggest Event flow continues in Part 3 =====
+    # ================= SUGGEST EVENT FLOW =================
     # ===== YEAR =====
     if state == STATE_SUGGEST_YEAR:
         if text.isdigit() and len(text) == 4:
@@ -961,13 +923,11 @@ for ev in longpoll.listen():
         else:
             send(uid, "Invalid year. Enter YYYY:", year_kb())
         continue
-
     # ===== MONTH =====
     if state == STATE_SUGGEST_MONTH:
         if text.isdigit() and 1 <= int(text) <= 12:
             set_data(uid, "month", int(text))
             set_state(uid, STATE_SUGGEST_DAY)
-
             year = get_data(uid, "year")
             month = get_data(uid, "month")
             send(uid, days_per_month_message(year, month))
@@ -975,8 +935,6 @@ for ev in longpoll.listen():
         else:
             send(uid, "Invalid month. Enter 1-12:", month_kb())
         continue
-
-
     # ===== DAY =====
     if state == STATE_SUGGEST_DAY:
         if text.isdigit() and 1 <= int(text) <= 31:
@@ -986,7 +944,6 @@ for ev in longpoll.listen():
         else:
             send(uid, "Invalid day. Enter 1-31:", day_kb())
         continue
-
     # ===== HOUR =====
     if state == STATE_SUGGEST_HOUR:
         if text.isdigit() and 0 <= int(text) <= 23:
@@ -996,7 +953,6 @@ for ev in longpoll.listen():
         else:
             send(uid, "Invalid hour. Enter 0-23:", hour_kb())
         continue
-
     # ===== MINUTE =====
     if state == STATE_SUGGEST_MINUTE:
         if text.isdigit() and 0 <= int(text) <= 59:
@@ -1006,29 +962,24 @@ for ev in longpoll.listen():
         else:
             send(uid, "Invalid minute. Enter 0-59:", minute_kb())
         continue
-
     # ===== DESCRIPTION =====
     if state == STATE_SUGGEST_DESC:
         set_data(uid, "desc", text)
         set_state(uid, STATE_SUGGEST_HASHTAG)
         send(uid, "Enter hashtag:")
         continue
-
     # ===== HASHTAG =====
     if state == STATE_SUGGEST_HASHTAG:
         set_data(uid, "hashtag", text)
         set_state(uid, STATE_SUGGEST_RECURRENCE)
         send(uid, "Select recurrence:", recurrence_kb())
         continue
-
     # ===== RECURRENCE =====
     if state == STATE_SUGGEST_RECURRENCE:
         recurrence_options = ["One-time", "Weekly", "Biweekly", "Monthly", "Yearly"]
-
         if text in recurrence_options:
             recurrence = text.lower()
             set_data(uid, "recurrence", recurrence)
-
             if recurrence == "one-time":
                 set_data(uid, "count", 1)
                 set_state(uid, STATE_SUGGEST_DURATION)
@@ -1040,13 +991,9 @@ for ev in longpoll.listen():
             else:
                 set_state(uid, STATE_SUGGEST_COUNT)
                 send(uid, "Enter number of occurrences:")
-
         else:
             send(uid, "Select recurrence:", recurrence_kb())
-
         continue
-
-
     if state == STATE_EXTEND_SELECT:
         if text == "Next":
             send_batch(uid, "msgs", "offset")
@@ -1054,7 +1001,6 @@ for ev in longpoll.listen():
             try:
                 idx = int(text) - 1
                 events = read_events(uid)
-
                 if 0 <= idx < len(events):
                     set_data(uid, "extend_idx", idx)
                     set_state(uid, STATE_EXTEND_PERIOD)
@@ -1064,69 +1010,51 @@ for ev in longpoll.listen():
             except:
                 send(uid, "Enter number.", nav_kb(True))
         continue
-
-
-
     if state == STATE_EXTEND_PERIOD:
-
         period_map = {
             "Weekly": timedelta(days=7),
             "Biweekly": timedelta(days=14),
             "Monthly": "monthly",
             "Annually": "yearly"
         }
-
         if text not in period_map:
             send(uid, "Select extension period:", extend_kb())
             continue
-
         idx = get_data(uid, "extend_idx")
         events = read_events(uid)
-
         if idx is None or not (0 <= idx < len(events)):
             send(uid, "Extension failed.", main_menu_kb())
             clear_data(uid)
             set_state(uid, STATE_START)
             continue
-
         original_line = events.pop(idx)
-
         parsed = parse_event_line(original_line)
         if not parsed:
             send(uid, "Failed parsing event.", main_menu_kb())
             clear_data(uid)
             set_state(uid, STATE_START)
             continue
-
         dt, desc_text, hashtag, uid_event, _ = parsed
-
         period = period_map[text]
-
         if period == "monthly":
             new_dt = safe_add_months(dt, 1)
         elif period == "yearly":
             new_dt = safe_add_years(dt, 1)
         else:
             new_dt = dt + period
-
         # rebuild full line preserving tail after datetime
         tail = original_line.split(" ", 1)[1]
         new_line = f"{new_dt.isoformat()} {tail}"
-
         events.append(new_line)
         write_events(uid, events)
         rearrange(uid)
-
         send(uid, "✅ Your event got extended.")
         send(uid, f"📅 It was rewritten to new date: {new_dt.date()}")
         send(uid, f"New entry:\n{new_line}")
-
         clear_data(uid)
         set_state(uid, STATE_START)
         send(uid, "Menu:", main_menu_kb())
         continue
-
-
     # ===== COUNT =====
     if state == STATE_SUGGEST_COUNT:
         if text.isdigit() and int(text) >= 1:
@@ -1136,14 +1064,12 @@ for ev in longpoll.listen():
         else:
             send(uid, "Enter valid number of occurrences:")
         continue
-
     # ===== DURATION =====
     if state == STATE_SUGGEST_DURATION:
         set_data(uid, "duration", text)
         set_state(uid, STATE_SUGGEST_PLACE)
         send(uid, "Enter place (can be ?):", place_kb())
         continue
-
     # ===== PLACE & SAVE EVENT =====
     if state == STATE_SUGGEST_PLACE:
         year = get_data(uid, "year")
@@ -1157,10 +1083,8 @@ for ev in longpoll.listen():
         count = get_data(uid, "count")
         duration = get_data(uid, "duration")
         place = get_data(uid, "place", text)
-
         base_dt = datetime(year, month, day, hour, minute)
         uid_event = next_uid(uid)
-
         delta_map = {
             "one-time": timedelta(),
             "weekly": timedelta(days=7),
@@ -1168,9 +1092,7 @@ for ev in longpoll.listen():
             "monthly": None,
             "yearly": None
         }
-
         events_to_append = []
-
         for i in range(count):
             dt = base_dt
             if recurrence == "monthly":
@@ -1179,20 +1101,16 @@ for ev in longpoll.listen():
                 dt = safe_add_years(base_dt, i)
             else:
                 dt = dt + i * delta_map.get(recurrence, timedelta())
-
             line = f"{dt.isoformat()} {desc} {hashtag} {uid_event} {duration} {place}".strip()
             events_to_append.append(line)
-
         for e in events_to_append:
             append_event(uid, e)
-
         rearrange(uid)
         clear_data(uid)
         set_state(uid, STATE_START)
         send(uid, f"Saved {count} events.", main_menu_kb())
         continue
-
-# ===== LIST MENU =====
+    # ===== LIST MENU =====
     if state == STATE_LIST_MENU:
         if text == "Show all":
             events = read_events(uid)
@@ -1212,8 +1130,7 @@ for ev in longpoll.listen():
             set_state(uid, STATE_START)
             send(uid, "Menu.", main_menu_kb())
         continue
-
-# ===== FILTER =====
+    # ===== FILTER =====
     if state == STATE_FILTER:
         tag = text.lower()
         events = [e for e in read_events(uid) if tag in e.lower()]
@@ -1227,8 +1144,7 @@ for ev in longpoll.listen():
             set_state(uid, STATE_LIST_VIEW)
             send_batch(uid, "msgs", "offset")
         continue
-
-# ===== LIST VIEW =====
+    # ===== LIST VIEW =====
     if state == STATE_LIST_VIEW:
         if text == "Next":
             send_batch(uid, "msgs", "offset")
@@ -1237,32 +1153,24 @@ for ev in longpoll.listen():
             set_state(uid, STATE_START)
             send(uid, "Menu.", main_menu_kb())
         continue
-
-
     if state == STATE_DATE_QUERY:
         try:
             target_date = datetime.strptime(text, "%Y-%m-%d").date()
         except ValueError:
             send(uid, "❌ Invalid format. Please use YYYY-MM-DD:")
             continue
-
         matches = events_for_date(uid, target_date)
-
         if not matches:
             send(uid, f"No events for {target_date}.")
         else:
             send(uid, f"📅 Events for {target_date}:")
             for line in matches:
                 send(uid, line)
-
         clear_data(uid)
         set_state(uid, STATE_START)
         send(uid, "Menu:", main_menu_kb())
         continue
-
-
-
-# ===== DELETE BY ARRAY =====
+    # ===== DELETE BY ARRAY =====
     if state == STATE_DELETE_ARRAY:
         if text == "Next":
             send_batch(uid, "msgs", "offset")
@@ -1272,35 +1180,26 @@ for ev in longpoll.listen():
                     {int(x) - 1 for x in text.split() if x.isdigit()},
                     reverse=True
                 )
-
                 events = read_events(uid)
                 removed = []
-
                 for idx in numbers:
                     if 0 <= idx < len(events):
                         removed.append(events.pop(idx))
-
                 if not removed:
                     send(uid, "No valid numbers.", nav_kb(True))
                 else:
                     write_events(uid, events)
                     rearrange(uid)
-
                     send(uid, "You've deleted entries:")
-
                     for r in removed:
                         send(uid, r)
-
                     send(uid, "Done.", main_menu_kb())
-
             except:
                 send(uid, "Enter numbers separated by spaces.", nav_kb(True))
-
             clear_data(uid)
             set_state(uid, STATE_START)
         continue
-
-# ===== COMPLETE EVENT =====
+    # ===== COMPLETE EVENT =====
     if state == STATE_COMPLETE:
         if text == "Next":
             send_batch(uid, "msgs", "offset")
@@ -1308,27 +1207,20 @@ for ev in longpoll.listen():
             try:
                 idx = int(text) - 1
                 events = read_events(uid)
-
                 if 0 <= idx < len(events):
                     completed = events.pop(idx)
-
                     append_done(uid, completed)
-
                     write_events(uid, events)
                     rearrange(uid)
-
                     send(uid, f"✅ Completed:\n{completed}", main_menu_kb())
                 else:
                     send(uid, "Invalid number.", nav_kb(True))
             except:
                 send(uid, "Enter number.", nav_kb(True))
-
             clear_data(uid)
             set_state(uid, STATE_START)
         continue
-
-
-# ===== DELETE BY HASHTAG =====
+    # ===== DELETE BY HASHTAG =====
     if state == STATE_DELETE_HASHTAG:
         tag = text.strip()
         events = [e for e in read_events(uid) if not tag in e]
@@ -1338,8 +1230,7 @@ for ev in longpoll.listen():
         clear_data(uid)
         set_state(uid, STATE_START)
         continue
-
-# ===== DELETE BY UID =====
+    # ===== DELETE BY UID =====
     if state == STATE_DELETE_UID:
         del_uid = text.strip()
         events = [e for e in read_events(uid) if not line_has_uid(e, del_uid)]
@@ -1349,8 +1240,7 @@ for ev in longpoll.listen():
         clear_data(uid)
         set_state(uid, STATE_START)
         continue
-
-# ===== DELETE COMPLETED BY NUMBER =====
+    # ===== DELETE COMPLETED BY NUMBER =====
     if state == STATE_DELETE_DONE:
         if text == "Next":
             send_batch(uid, "msgs", "offset")
@@ -1358,27 +1248,21 @@ for ev in longpoll.listen():
             try:
                 idx = int(text) - 1
                 events = read_done(uid)
-
                 if 0 <= idx < len(events):
                     removed = events.pop(idx)
-
                     with open(done_file(uid), "w", encoding="utf-8") as f:
                         for e in events:
                             f.write(e + "\n")
-
-                    send(uid, f"Deleted:")
+                    send(uid, "Deleted:")
                     send(uid, f"{removed}", main_menu_kb())
                 else:
                     send(uid, "Invalid number.", nav_kb(True))
             except:
                 send(uid, "Enter number.", nav_kb(True))
-
             clear_data(uid)
             set_state(uid, STATE_START)
         continue
-
-
-# ===== EDIT COMPLETED =====
+    # ===== EDIT COMPLETED =====
     if state == STATE_EDIT_DONE_SELECT:
         if text == "Next":
             send_batch(uid, "msgs", "offset")
@@ -1397,7 +1281,6 @@ for ev in longpoll.listen():
             except:
                 send(uid, "Enter number.", nav_kb(True))
         continue
-
     if state == STATE_EDIT_DONE_INPUT:
         idx = get_data(uid, "edit_idx")
         events = read_done(uid)
@@ -1412,47 +1295,34 @@ for ev in longpoll.listen():
         clear_data(uid)
         set_state(uid, STATE_START)
         continue
-
-
-
     if state == STATE_QUICK_ADD:
         append_event(uid, text)
         clear_data(uid)
         set_state(uid, STATE_START)
         send(uid, "Saved.", main_menu_kb())
-
-
     if state == STATE_NUMBER_QUERY:
         query = text.strip()
-
         events = read_events(uid)
         found = []
-
         for idx, line in enumerate(events):
             parsed = parse_event_line(line)
             if not parsed:
                 continue
-
             dt, desc, _, _, raw = parsed
-
             if query in desc:
                 line_no = idx + 1
                 weekday = dt.strftime("%A")
                 found.append((line_no, weekday, raw))
-
         if not found:
             send(uid, "No matches found.")
         else:
             send(uid, "🔎 Matches in planner (absolute line numbers):")
             for line_no, weekday, raw in found:
                 send(uid, f"#{line_no} | {weekday}\n{raw}")
-
         clear_data(uid)
         set_state(uid, STATE_START)
         send(uid, "Menu:", main_menu_kb())
-
-
-# ===== EDIT =====
+    # ===== EDIT =====
     if state == STATE_EDIT_SELECT:
         if text == "Next":
             send_batch(uid, "msgs", "offset")
@@ -1463,7 +1333,7 @@ for ev in longpoll.listen():
                 if 0 <= idx < len(events):
                     set_data(uid, "edit_idx", idx)
                     set_state(uid, STATE_EDIT_INPUT)
-                    send(uid, f"Текст оригинального сообщения для правки")                    
+                    send(uid, f"Текст оригинального сообщения для правки")
                     send(uid, f"{events[idx]}")
                     send(uid, f"Отправь измененную версию")
                 else:
@@ -1471,21 +1341,17 @@ for ev in longpoll.listen():
             except:
                 send(uid, "Enter number.", nav_kb(True))
         continue
-
     if state == STATE_DELETE_PHOTOS:
         try:
             numbers = sorted(
                 {int(x) - 1 for x in text.split() if x.isdigit()},
                 reverse=True
             )
-
             entries = get_data(uid, "photo_entries", [])
             removed = []
-
             for idx in numbers:
                 if 0 <= idx < len(entries):
                     removed.append(entries.pop(idx))
-
             if not removed:
                 send(uid, "No valid numbers.", main_menu_kb())
             else:
@@ -1493,24 +1359,17 @@ for ev in longpoll.listen():
                 with open(photo_file, "w", encoding="utf-8") as f:
                     for e in entries:
                         f.write(e + "\n")
-
                 send(uid, "You've deleted photo entries:")
                 for r in removed:
                     desc = r.split("||", 1)[1] if "||" in r else ""
                     send(uid, desc or "[no description]")
-
                 send(uid, "Done.", main_menu_kb())
-
         except Exception as e:
             log.error(f"Photo delete failed for {uid}: {e}")
             send(uid, "Enter numbers separated by spaces.", main_menu_kb())
-
         clear_data(uid)
         set_state(uid, STATE_START)
         continue
-
-
-
     if state == STATE_EDIT_INPUT:
         idx = get_data(uid, "edit_idx")
         events = read_events(uid)
@@ -1523,6 +1382,3 @@ for ev in longpoll.listen():
             send(uid, "Edit failed.", main_menu_kb())
         clear_data(uid)
         set_state(uid, STATE_START)
-
-
-
