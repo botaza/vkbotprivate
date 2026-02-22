@@ -137,7 +137,11 @@ def extract_hashtag(text):
     return m.group(1) if m else None
 
 def line_has_uid(line, uid_value):
-    return uid_value in line.split()
+    parsed = parse_event_line(line)
+    if not parsed:
+        return False
+    _, _, _, uid_event, _ = parsed
+    return uid_event == uid_value
 
 # ================= PLANNER =================
 def planner(uid):
@@ -1137,12 +1141,21 @@ for ev in longpoll.listen():
         continue
 
     if state == STATE_SUGGEST_DAY:
-        if text.isdigit() and 1 <= int(text) <= 31:
-            set_data(uid, "day", int(text))
-            set_state(uid, STATE_SUGGEST_HOUR)
-            send(uid, "Enter hour (0-23):", hour_kb())
+        year = int(get_data(uid, "year"))
+        month = int(get_data(uid, "month"))
+        if text.isdigit():
+            day = int(text)
+            max_day = calendar.monthrange(year, month)[1]
+            if 1 <= day <= max_day:
+                set_data(uid, "day", day)
+                set_state(uid, STATE_SUGGEST_HOUR)
+                send(uid, "Enter hour (0-23):", hour_kb())
+            else:
+                send(uid, f"Invalid day. {calendar.month_name[month]} {year} has {max_day} days.")
+                send(uid, "Enter day again:", day_kb())
         else:
-            send(uid, "Invalid day. Enter 1-31:", day_kb())
+            send(uid, "Please enter a number for the day.")
+            send(uid, "Enter day again:", day_kb())
         continue
 
     if state == STATE_SUGGEST_HOUR:
