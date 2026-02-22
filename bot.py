@@ -541,12 +541,17 @@ def edit_menu_kb():
     kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
+
 def quick_commands_kb():
     kb = VkKeyboard(one_time=True)
+    # First row: existing quick commands
     kb.add_button("/today", VkKeyboardColor.PRIMARY)
     kb.add_button("/number", VkKeyboardColor.PRIMARY)
     kb.add_button("/extend", VkKeyboardColor.PRIMARY)
     kb.add_line()
+    # Second row: new buttons + back to menu
+    kb.add_button("/date", VkKeyboardColor.PRIMARY)
+    kb.add_button("/pics", VkKeyboardColor.PRIMARY)
     kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
@@ -558,7 +563,7 @@ def main_menu_kb():
     kb.add_line()
     kb.add_button("List", VkKeyboardColor.PRIMARY)
     kb.add_button("Delete", VkKeyboardColor.NEGATIVE)
-    kb.add_button("Edit", VkKeyboardColor.SECONDARY)
+    kb.add_button("Edit", VkKeyboardColor.PRIMARY)
     kb.add_line()
     kb.add_button("Quick Commands", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
