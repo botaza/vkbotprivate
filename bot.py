@@ -705,10 +705,13 @@ def list_menu_kb():
     kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
+
 def nav_kb(has_next):
     kb = VkKeyboard(one_time=True)
     if has_next:
         kb.add_button("Next", VkKeyboardColor.PRIMARY)
+        kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    else:
         kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
@@ -1329,7 +1332,7 @@ for ev in longpoll.listen():
 
     # ===== FILTER =====
     if state == STATE_FILTER:
-        tag = text.strip()
+        tag = text.strip().lower()
         if tag.startswith('#'):
             tag = tag[1:]
         events = [e for e in read_events(uid) if tag in e.lower()]
