@@ -130,7 +130,7 @@ def next_uid(uid):
 
 # ================= HASHTAG & LINE PARSING =================
 HASHTAG_RE = re.compile(r"(#\w+)")
-EVENT_OR_PERS_RE = re.compile(r"\b(event|pers)\b", re.IGNORECASE)
+EVENT_OR_PERS_RE = re.compile(r"\b(event|pers|control)\b", re.IGNORECASE)
 
 def extract_hashtag(text):
     """Return first hashtag in a line or None if missing"""
@@ -285,9 +285,12 @@ def hourly_reminder_worker():
             log.error(f"Hourly reminder worker error: {e}")
             time.sleep(60)
 
-def daily_hashtag_reminder_worker():
-    """Updated to support both 'event' and 'pers' hashtags"""
+
+
+def daily_event_reminder_worker():
+    """Send reminders for #event hashtag at 17:00"""
     last_run_date = None
+    event_re = re.compile(r"\b(event)\b", re.IGNORECASE)
     while True:
         try:
             now = datetime.now()
@@ -299,30 +302,111 @@ def daily_hashtag_reminder_worker():
                 last_run_date = today
                 with state_lock:
                     uids = list(states.keys())
-                for uid in uids:
-                    events = read_events(uid)
-                    day_map = {}
-                    for line in events:
-                        parsed = parse_event_line(line)
-                        if not parsed:
-                            continue
-                        dt, _, _, _, raw_line = parsed
-                        if dt >= now and EVENT_OR_PERS_RE.search(raw_line):
-                            day = dt.date()
-                            day_map.setdefault(day, []).append(raw_line)
-                    for day in sorted(day_map):
-                        weekday_num = datetime.combine(day, datetime.min.time()).isoweekday()
-                        weekday_emoji = WEEKDAY_EMOJI[weekday_num]
-                        block = "\n".join(day_map[day])
-                        msg = f"📌 {weekday_emoji} Event reminders for {day}:\n{block}"
-                        try:
-                            send(int(uid), msg)
-                        except Exception as e:
-                            log.error(f"17:00 event reminder failed for {uid}: {e}")
-            time.sleep(20)
+                    for uid in uids:
+                        events = read_events(uid)
+                        day_map = {}
+                        for line in events:
+                            parsed = parse_event_line(line)
+                            if not parsed:
+                                continue
+                            dt, _, _, _, raw_line = parsed
+                            if dt >= now and event_re.search(raw_line):
+                                day = dt.date()
+                                day_map.setdefault(day, []).append(raw_line)
+                        for day in sorted(day_map):
+                            weekday_num = datetime.combine(day, datetime.min.time()).isoweekday()
+                            weekday_emoji = WEEKDAY_EMOJI[weekday_num]
+                            block = "\n".join(day_map[day])
+                            msg = f"📌 {weekday_emoji} Event reminders for {day}:\n{block}"
+                            try:
+                                send(int(uid), msg)
+                            except Exception as e:
+                                log.error(f"17:00 event reminder failed for {uid}: {e}")
+                        time.sleep(20)
         except Exception as e:
-            log.error(f"Daily hashtag reminder worker error: {e}")
+            log.error(f"Daily event reminder worker error: {e}")
             time.sleep(60)
+
+def daily_control_reminder_worker():
+    """Send reminders for #control hashtag at 18:00"""
+    last_run_date = None
+    control_re = re.compile(r"\b(control)\b", re.IGNORECASE)
+    while True:
+        try:
+            now = datetime.now()
+            today = now.date()
+            if now.hour == 18 and now.minute < 2:
+                if last_run_date == today:
+                    time.sleep(30)
+                    continue
+                last_run_date = today
+                with state_lock:
+                    uids = list(states.keys())
+                    for uid in uids:
+                        events = read_events(uid)
+                        day_map = {}
+                        for line in events:
+                            parsed = parse_event_line(line)
+                            if not parsed:
+                                continue
+                            dt, _, _, _, raw_line = parsed
+                            if dt >= now and control_re.search(raw_line):
+                                day = dt.date()
+                                day_map.setdefault(day, []).append(raw_line)
+                        for day in sorted(day_map):
+                            weekday_num = datetime.combine(day, datetime.min.time()).isoweekday()
+                            weekday_emoji = WEEKDAY_EMOJI[weekday_num]
+                            block = "\n".join(day_map[day])
+                            msg = f"📌 {weekday_emoji} Control reminders for {day}:\n{block}"
+                            try:
+                                send(int(uid), msg)
+                            except Exception as e:
+                                log.error(f"18:00 control reminder failed for {uid}: {e}")
+                        time.sleep(20)
+        except Exception as e:
+            log.error(f"Daily control reminder worker error: {e}")
+            time.sleep(60)
+
+def daily_pers_reminder_worker():
+    """Send reminders for #pers hashtag at 21:00"""
+    last_run_date = None
+    pers_re = re.compile(r"\b(pers)\b", re.IGNORECASE)
+    while True:
+        try:
+            now = datetime.now()
+            today = now.date()
+            if now.hour == 21 and now.minute < 2:
+                if last_run_date == today:
+                    time.sleep(30)
+                    continue
+                last_run_date = today
+                with state_lock:
+                    uids = list(states.keys())
+                    for uid in uids:
+                        events = read_events(uid)
+                        day_map = {}
+                        for line in events:
+                            parsed = parse_event_line(line)
+                            if not parsed:
+                                continue
+                            dt, _, _, _, raw_line = parsed
+                            if dt >= now and pers_re.search(raw_line):
+                                day = dt.date()
+                                day_map.setdefault(day, []).append(raw_line)
+                        for day in sorted(day_map):
+                            weekday_num = datetime.combine(day, datetime.min.time()).isoweekday()
+                            weekday_emoji = WEEKDAY_EMOJI[weekday_num]
+                            block = "\n".join(day_map[day])
+                            msg = f"📌 {weekday_emoji} Personal reminders for {day}:\n{block}"
+                            try:
+                                send(int(uid), msg)
+                            except Exception as e:
+                                log.error(f"21:00 pers reminder failed for {uid}: {e}")
+                        time.sleep(20)
+        except Exception as e:
+            log.error(f"Daily pers reminder worker error: {e}")
+            time.sleep(60)
+
 
 def multi_day_reminder_worker():
     """Send reminders at 14, 7, and 3 days prior to events (for event/pers tags)"""
@@ -709,10 +793,14 @@ def send(uid, text, kb=None):
     vk.messages.send(user_id=uid, random_id=0, message=text, keyboard=kb)
 
 # ================= MAIN LOOP =================
+# ================= MAIN LOOP =================
 threading.Thread(target=daily_digest_worker, daemon=True).start()
 threading.Thread(target=hourly_reminder_worker, daemon=True).start()
-threading.Thread(target=daily_hashtag_reminder_worker, daemon=True).start()
+threading.Thread(target=daily_event_reminder_worker, daemon=True).start()
+threading.Thread(target=daily_control_reminder_worker, daemon=True).start()
+threading.Thread(target=daily_pers_reminder_worker, daemon=True).start()
 threading.Thread(target=multi_day_reminder_worker, daemon=True).start()
+
 
 for ev in longpoll.listen():
     if ev.type != VkEventType.MESSAGE_NEW or not ev.to_me:
