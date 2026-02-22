@@ -4,18 +4,19 @@ from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 from datetime import datetime, timedelta
 from typing import Optional
 import os, json, logging
+from logging.handlers import RotatingFileHandler
 import threading
 import calendar
 import time
 import re
 
-# ================= LOGGING =================
-logging.basicConfig(
-    filename="bot.log",
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+# ================= LOGGING (Enhancement 4: Rotation) =================
 log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
+handler = RotatingFileHandler("bot.log", maxBytes=5*1024*1024, backupCount=3)
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+handler.setFormatter(formatter)
+log.addHandler(handler)
 
 REMINDER_FILE = "sent_reminders.json"
 
@@ -66,6 +67,10 @@ STATE_QUICK_COMMANDS = "quick_commands"
 with open(TOKEN_FILE, "r", encoding="utf-8") as f:
     TOKEN = f.read().strip()
 
+# ================= THREAD SAFETY (Enhancement 1) =================
+state_lock = threading.RLock()
+reminder_lock = threading.RLock()
+
 # ================= STATE STORAGE =================
 def load_states():
     if not os.path.exists(STATE_FILE):
@@ -77,42 +82,55 @@ def load_states():
         return {}
 
 def save_states():
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(states, f, indent=2)
+    with state_lock:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(states, f, indent=2)
 
 states = load_states()
 
 def user(uid):
     uid = str(uid)
-    if uid not in states:
-        states[uid] = {"state": STATE_START, "data": {}, "next_uid": 1}
-        save_states()
-    return states[uid]
+    with state_lock:
+        if uid not in states:
+            states[uid] = {"state": STATE_START, "data": {}, "next_uid": 1}
+            # Save immediately inside lock to avoid race condition on creation
+            with open(STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(states, f, indent=2)
+        return states[uid]
 
 def set_state(uid, s):
-    user(uid)["state"] = s
-    save_states()
+    with state_lock:
+        user(uid)["state"] = s
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(states, f, indent=2)
 
 def set_data(uid, k, v):
-    user(uid)["data"][k] = v
-    save_states()
+    with state_lock:
+        user(uid)["data"][k] = v
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(states, f, indent=2)
 
 def get_data(uid, k, default=None):
-    return user(uid)["data"].get(k, default)
+    with state_lock:
+        return user(uid)["data"].get(k, default)
 
 def clear_data(uid):
-    user(uid)["data"] = {}
-    save_states()
+    with state_lock:
+        user(uid)["data"] = {}
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(states, f, indent=2)
 
 def next_uid(uid):
-    val = user(uid).get("next_uid", 1)
-    user(uid)["next_uid"] = val + 1
-    save_states()
-    return f"uid{val}"
+    with state_lock:
+        val = user(uid).get("next_uid", 1)
+        user(uid)["next_uid"] = val + 1
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(states, f, indent=2)
+        return f"uid{val}"
 
 # ================= HASHTAG & LINE PARSING =================
 HASHTAG_RE = re.compile(r"(#\w+)")
-EVENT_OR_PERS_RE = re.compile(r"\b(event|pers)\b", re.IGNORECASE)  # ← UPDATED
+EVENT_OR_PERS_RE = re.compile(r"\b(event|pers)\b", re.IGNORECASE)
 
 def extract_hashtag(text):
     """Return first hashtag in a line or None if missing"""
@@ -168,30 +186,59 @@ def parse_event_line(line):
         return None
 
 # ================= REMINDER WORKERS =================
+def cleanup_sent_reminders():
+    """Enhancement 2: Remove old reminder keys to prevent memory leak"""
+    now = datetime.now()
+    keys_to_delete = []
+    with reminder_lock:
+        for key in sent_reminders:
+            parts = key.split('|')
+            if len(parts) >= 3:
+                try:
+                    event_date = datetime.fromisoformat(parts[2])
+                    if now - event_date > timedelta(days=7):
+                        keys_to_delete.append(key)
+                except:
+                    pass
+        
+        if keys_to_delete:
+            for k in keys_to_delete:
+                del sent_reminders[k]
+            with open(REMINDER_FILE, "w", encoding="utf-8") as f:
+                json.dump(sent_reminders, f, indent=2)
+            log.info(f"Cleaned up {len(keys_to_delete)} old reminder keys.")
 
 def daily_digest_worker():
     while True:
-        now = datetime.now()
-        if now.hour == 8 and now.minute == 0:
-            today = now.date()
-            for uid in states.keys():
-                events = read_events(uid)
-                todays = []
-                for l in events:
-                    parsed = parse_event_line(l)
-                    if not parsed:
-                        continue
-                    dt, _, _, _, _ = parsed
-                    if dt.date() == today:
-                        todays.append(l)
-                if todays:
-                    msg = "📅 Events today:\n" + "\n".join(todays)
-                    try:
-                        send(int(uid), msg)
-                    except Exception as e:
-                        log.error(f"Daily digest send failed for {uid}: {e}")
-        time.sleep(61)
-        time.sleep(20)
+        try:
+            now = datetime.now()
+            if now.hour == 8 and now.minute == 0:
+                # Run cleanup once a day during digest
+                cleanup_sent_reminders()
+                
+                today = now.date()
+                with state_lock:
+                    uids = list(states.keys())
+                for uid in uids:
+                    events = read_events(uid)
+                    todays = []
+                    for l in events:
+                        parsed = parse_event_line(l)
+                        if not parsed:
+                            continue
+                        dt, _, _, _, _ = parsed
+                        if dt.date() == today:
+                            todays.append(l)
+                    if todays:
+                        msg = "📅 Events today:\n" + "\n".join(todays)
+                        try:
+                            send(int(uid), msg)
+                        except Exception as e:
+                            log.error(f"Daily digest send failed for {uid}: {e}")
+            time.sleep(61)
+        except Exception as e:
+            log.error(f"Daily digest worker error: {e}")
+            time.sleep(60)
 
 def events_for_date(uid, target_date):
     events = read_events(uid)
@@ -207,64 +254,76 @@ def events_for_date(uid, target_date):
 
 def hourly_reminder_worker():
     while True:
-        now = datetime.now()
-        for uid in states.keys():
-            events = read_events(uid)
-            for l in events:
-                parsed = parse_event_line(l)
-                if not parsed:
-                    continue
-                dt, desc, hashtag, uid_event, _ = parsed
-                delta = (dt - now).total_seconds()
-                if 0 < delta <= 3600:
-                    key = f"{uid}|{uid_event}|{dt.isoformat()}"
-                    if key in sent_reminders:
+        try:
+            now = datetime.now()
+            with state_lock:
+                uids = list(states.keys())
+            for uid in uids:
+                events = read_events(uid)
+                for l in events:
+                    parsed = parse_event_line(l)
+                    if not parsed:
                         continue
-                    msg = f"⏰ Reminder:\n{dt.strftime('%H:%M')} {desc} {hashtag}"
-                    try:
-                        send(int(uid), msg)
-                        sent_reminders[key] = True
-                        save_sent_reminders(sent_reminders)
-                    except Exception as e:
-                        log.error(f"Reminder send failed for {uid}: {e}")
-        time.sleep(60)
+                    dt, desc, hashtag, uid_event, _ = parsed
+                    delta = (dt - now).total_seconds()
+                    if 0 < delta <= 3600:
+                        key = f"{uid}|{uid_event}|{dt.isoformat()}"
+                        with reminder_lock:
+                            if key in sent_reminders:
+                                continue
+                        msg = f"⏰ Reminder:\n{dt.strftime('%H:%M')} {desc} {hashtag}"
+                        try:
+                            send(int(uid), msg)
+                            with reminder_lock:
+                                sent_reminders[key] = True
+                                with open(REMINDER_FILE, "w", encoding="utf-8") as f:
+                                    json.dump(sent_reminders, f, indent=2)
+                        except Exception as e:
+                            log.error(f"Reminder send failed for {uid}: {e}")
+            time.sleep(60)
+        except Exception as e:
+            log.error(f"Hourly reminder worker error: {e}")
+            time.sleep(60)
 
 def daily_hashtag_reminder_worker():
     """Updated to support both 'event' and 'pers' hashtags"""
     last_run_date = None
     while True:
-        now = datetime.now()
-        today = now.date()
-        if now.hour == 17 and now.minute < 2:
-            if last_run_date == today:
-                time.sleep(30)
-                continue
-            last_run_date = today
-            for uid in list(states.keys()):
-                events = read_events(uid)
-                day_map = {}
-                for line in events:
-                    parsed = parse_event_line(line)
-                    if not parsed:
-                        continue
-                    dt, _, _, _, raw_line = parsed
-                    # ← UPDATED: Check for event OR pers keyword
-                    if dt >= now and EVENT_OR_PERS_RE.search(raw_line):
-                        day = dt.date()
-                        day_map.setdefault(day, []).append(raw_line)
-                for day in sorted(day_map):
-                    weekday_num = datetime.combine(day, datetime.min.time()).isoweekday()
-                    weekday_emoji = WEEKDAY_EMOJI[weekday_num]
-                    block = "\n".join(day_map[day])
-                    msg = f"📌 {weekday_emoji} Event reminders for {day}:\n{block}"
-                    try:
-                        send(int(uid), msg)
-                    except Exception as e:
-                        log.error(f"17:00 event reminder failed for {uid}: {e}")
-            time.sleep(90)
-        time.sleep(20)
+        try:
+            now = datetime.now()
+            today = now.date()
+            if now.hour == 17 and now.minute < 2:
+                if last_run_date == today:
+                    time.sleep(30)
+                    continue
+                last_run_date = today
+                with state_lock:
+                    uids = list(states.keys())
+                for uid in uids:
+                    events = read_events(uid)
+                    day_map = {}
+                    for line in events:
+                        parsed = parse_event_line(line)
+                        if not parsed:
+                            continue
+                        dt, _, _, _, raw_line = parsed
+                        if dt >= now and EVENT_OR_PERS_RE.search(raw_line):
+                            day = dt.date()
+                            day_map.setdefault(day, []).append(raw_line)
+                    for day in sorted(day_map):
+                        weekday_num = datetime.combine(day, datetime.min.time()).isoweekday()
+                        weekday_emoji = WEEKDAY_EMOJI[weekday_num]
+                        block = "\n".join(day_map[day])
+                        msg = f"📌 {weekday_emoji} Event reminders for {day}:\n{block}"
+                        try:
+                            send(int(uid), msg)
+                        except Exception as e:
+                            log.error(f"17:00 event reminder failed for {uid}: {e}")
+            time.sleep(20)
+        except Exception as e:
+            log.error(f"Daily hashtag reminder worker error: {e}")
+            time.sleep(60)
 
-# ← NEW: Multi-day advance reminder worker
 def multi_day_reminder_worker():
     """Send reminders at 14, 7, and 3 days prior to events (for event/pers tags)"""
     reminder_intervals = [
@@ -273,52 +332,49 @@ def multi_day_reminder_worker():
         (3, "🗓️ Three days before"),
     ]
     last_run_date = None
-    
     while True:
-        now = datetime.now()
-        today = now.date()
-        
-        # Run once per day at 9:00 AM (adjustable)
-        if now.hour == 9 and now.minute < 2:
-            if last_run_date == today:
-                time.sleep(30)
-                continue
-            last_run_date = today
-            
-            for uid in list(states.keys()):
-                events = read_events(uid)
-                for l in events:
-                    parsed = parse_event_line(l)
-                    if not parsed:
-                        continue
-                    dt, desc, hashtag, uid_event, raw_line = parsed
-                    
-                    # Only process future events with event/pers tags
-                    if dt.date() <= today:
-                        continue
-                    if not EVENT_OR_PERS_RE.search(raw_line):
-                        continue
-                    
-                    days_until = (dt.date() - today).days
-                    
-                    for days_prior, reminder_prefix in reminder_intervals:
-                        if days_until == days_prior:
-                            # Unique key per reminder type to avoid duplicates
-                            key = f"{uid}|{uid_event}|{dt.isoformat()}|{days_prior}d"
-                            if key in sent_reminders:
-                                continue
-                            
-                            msg = f"{reminder_prefix}:\n{dt.strftime('%Y-%m-%d %H:%M')} {desc} {hashtag}"
-                            try:
-                                send(int(uid), msg)
-                                sent_reminders[key] = True
-                                save_sent_reminders(sent_reminders)
-                                log.info(f"Sent {days_prior}d reminder to {uid} for {uid_event}")
-                            except Exception as e:
-                                log.error(f"Multi-day reminder failed for {uid}: {e}")
-            
-            time.sleep(90)  # Prevent duplicate sends in the 2-min window
-        time.sleep(20)
+        try:
+            now = datetime.now()
+            today = now.date()
+            if now.hour == 9 and now.minute < 2:
+                if last_run_date == today:
+                    time.sleep(30)
+                    continue
+                last_run_date = today
+                with state_lock:
+                    uids = list(states.keys())
+                for uid in uids:
+                    events = read_events(uid)
+                    for l in events:
+                        parsed = parse_event_line(l)
+                        if not parsed:
+                            continue
+                        dt, desc, hashtag, uid_event, raw_line = parsed
+                        if dt.date() <= today:
+                            continue
+                        if not EVENT_OR_PERS_RE.search(raw_line):
+                            continue
+                        days_until = (dt.date() - today).days
+                        for days_prior, reminder_prefix in reminder_intervals:
+                            if days_until == days_prior:
+                                key = f"{uid}|{uid_event}|{dt.isoformat()}|{days_prior}d"
+                                with reminder_lock:
+                                    if key in sent_reminders:
+                                        continue
+                                msg = f"{reminder_prefix}:\n{dt.strftime('%Y-%m-%d %H:%M')} {desc} {hashtag}"
+                                try:
+                                    send(int(uid), msg)
+                                    with reminder_lock:
+                                        sent_reminders[key] = True
+                                        with open(REMINDER_FILE, "w", encoding="utf-8") as f:
+                                            json.dump(sent_reminders, f, indent=2)
+                                    log.info(f"Sent {days_prior}d reminder to {uid} for {uid_event}")
+                                except Exception as e:
+                                    log.error(f"Multi-day reminder failed for {uid}: {e}")
+            time.sleep(20)
+        except Exception as e:
+            log.error(f"Multi-day reminder worker error: {e}")
+            time.sleep(60)
 
 # ================= COMPLETED EVENTS =================
 def done_file(uid):
@@ -541,15 +597,12 @@ def edit_menu_kb():
     kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
-
 def quick_commands_kb():
     kb = VkKeyboard(one_time=True)
-    # First row: existing quick commands
     kb.add_button("/today", VkKeyboardColor.PRIMARY)
     kb.add_button("/number", VkKeyboardColor.PRIMARY)
     kb.add_button("/extend", VkKeyboardColor.PRIMARY)
     kb.add_line()
-    # Second row: new buttons + back to menu
     kb.add_button("/date", VkKeyboardColor.PRIMARY)
     kb.add_button("/pics", VkKeyboardColor.PRIMARY)
     kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
@@ -616,8 +669,9 @@ def load_sent_reminders():
         return {}
 
 def save_sent_reminders(data):
-    with open(REMINDER_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    with reminder_lock:
+        with open(REMINDER_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
 
 sent_reminders = load_sent_reminders()
 
@@ -655,11 +709,10 @@ def send(uid, text, kb=None):
     vk.messages.send(user_id=uid, random_id=0, message=text, keyboard=kb)
 
 # ================= MAIN LOOP =================
-# ← Start all reminder workers including the new one
 threading.Thread(target=daily_digest_worker, daemon=True).start()
 threading.Thread(target=hourly_reminder_worker, daemon=True).start()
 threading.Thread(target=daily_hashtag_reminder_worker, daemon=True).start()
-threading.Thread(target=multi_day_reminder_worker, daemon=True).start()  # ← NEW
+threading.Thread(target=multi_day_reminder_worker, daemon=True).start()
 
 for ev in longpoll.listen():
     if ev.type != VkEventType.MESSAGE_NEW or not ev.to_me:
@@ -740,6 +793,8 @@ for ev in longpoll.listen():
 
     if text.lower() == "/pics":
         send_photos(uid)
+        clear_data(uid)  # Fix: Reset data
+        set_state(uid, STATE_START)  # Fix: Reset state
         continue
 
     if text.lower() == "/rearrange":
