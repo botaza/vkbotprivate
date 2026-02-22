@@ -325,6 +325,27 @@ def read_done(uid):
         return [l.rstrip() for l in f if l.strip()]
 
 
+
+# ================= DATE HELPERS =================
+def safe_add_months(dt, months):
+    """Add months safely. Handles edge cases like Jan 31 -> Feb 28."""
+    month = dt.month - 1 + months
+    year = dt.year + month // 12
+    month = month % 12 + 1
+    # Clamp day to the maximum days in the target month
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
+
+def safe_add_years(dt, years):
+    """Add years safely. Handles Feb 29 on leap years -> Feb 28 on non-leap."""
+    try:
+        return dt.replace(year=dt.year + years)
+    except ValueError:
+        # Happens when adding years to Feb 29 and target year is not leap
+        return dt.replace(year=dt.year + years, day=28)
+
+
+
 # ================= GROUPING =================
 WEEKDAY_EMOJI = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣"]
 
@@ -1082,12 +1103,9 @@ for ev in longpoll.listen():
         period = period_map[text]
 
         if period == "monthly":
-            month_new = dt.month + 1
-            year_new = dt.year + (month_new - 1) // 12
-            month_new = (month_new - 1) % 12 + 1
-            new_dt = dt.replace(year=year_new, month=month_new)
+            new_dt = safe_add_months(dt, 1)
         elif period == "yearly":
-            new_dt = dt.replace(year=dt.year + 1)
+            new_dt = safe_add_years(dt, 1)
         else:
             new_dt = dt + period
 
@@ -1156,12 +1174,9 @@ for ev in longpoll.listen():
         for i in range(count):
             dt = base_dt
             if recurrence == "monthly":
-                month_new = dt.month + i
-                year_new = dt.year + (month_new - 1) // 12
-                month_new = (month_new - 1) % 12 + 1
-                dt = dt.replace(year=year_new, month=month_new)
+                dt = safe_add_months(base_dt, i)
             elif recurrence == "yearly":
-                dt = dt.replace(year=dt.year + i)
+                dt = safe_add_years(base_dt, i)
             else:
                 dt = dt + i * delta_map.get(recurrence, timedelta())
 
