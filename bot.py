@@ -62,6 +62,10 @@ STATE_DELETE_MENU = "delete_menu"
 STATE_LIST_MAIN_MENU = "list_main_menu"
 STATE_EDIT_MENU = "edit_menu"
 STATE_QUICK_COMMANDS = "quick_commands"
+STATE_REMIND_SELECT = "remind_select"
+STATE_REMIND_COUNT = "remind_count"
+STATE_REMIND_MINUTES = "remind_minutes"
+STATE_REMIND_INDEX = "remind_index"
 
 # ================= TOKEN =================
 with open(TOKEN_FILE, "r", encoding="utf-8") as f:
@@ -455,6 +459,54 @@ def multi_day_reminder_worker():
             log.error(f"Multi-day reminder worker error: {e}")
             time.sleep(60)
 
+
+
+def custom_reminder_worker():
+    """Check and send user-defined custom reminders based on minutes-before-event"""
+    while True:
+        try:
+            now = datetime.now()
+            with state_lock:
+                uids = list(states.keys())
+                for uid in uids:
+                    with reminder_lock:
+                        for key in list(sent_reminders.keys()):
+                            parts = key.split('|')
+                            if len(parts) >= 4 and parts[3].startswith("custom_"):
+                                if sent_reminders[key].get("notified", False):
+                                    continue
+                                
+                                stored_uid, event_uid, event_dt_str, reminder_tag = parts
+                                
+                                if stored_uid != str(uid):
+                                    continue
+                                
+                                try:
+                                    event_dt = datetime.fromisoformat(event_dt_str)
+                                    minutes_before = sent_reminders[key]["minutes_before"]
+                                    notify_time = event_dt - timedelta(minutes=minutes_before)
+                                    time_diff = (notify_time - now).total_seconds()
+                                    
+                                    if -60 <= time_diff <= 60:
+                                        desc = sent_reminders[key].get("event_desc", "Event")
+                                        msg = f"⏰ Custom Reminder ({minutes_before}m before):\n{event_dt.strftime('%H:%M')} {desc}"
+                                        
+                                        try:
+                                            send(int(uid), msg)
+                                            sent_reminders[key]["notified"] = True
+                                            with open(REMINDER_FILE, "w", encoding="utf-8") as f:
+                                                json.dump(sent_reminders, f, indent=2)
+                                        except Exception as e:
+                                            log.error(f"Custom reminder send failed for {uid}: {e}")
+                                except Exception as e:
+                                    log.warning(f"Failed processing custom reminder key {key}: {e}")
+            
+            time.sleep(30)
+        
+        except Exception as e:
+            log.error(f"Custom reminder worker error: {e}")
+            time.sleep(60)
+
 # ================= COMPLETED EVENTS =================
 def done_file(uid):
     return os.path.join(PLANNER_DIR, f"{uid}done.txt")
@@ -685,6 +737,8 @@ def quick_commands_kb():
     kb.add_line()
     kb.add_button("/date", VkKeyboardColor.PRIMARY)
     kb.add_button("/pics", VkKeyboardColor.PRIMARY)
+    kb.add_button("/remind", VkKeyboardColor.PRIMARY)    
+    kb.add_line()
     kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
@@ -800,6 +854,7 @@ threading.Thread(target=daily_event_reminder_worker, daemon=True).start()
 threading.Thread(target=daily_control_reminder_worker, daemon=True).start()
 threading.Thread(target=daily_pers_reminder_worker, daemon=True).start()
 threading.Thread(target=multi_day_reminder_worker, daemon=True).start()
+threading.Thread(target=custom_reminder_worker, daemon=True).start()
 
 for ev in longpoll.listen():
     if ev.type != VkEventType.MESSAGE_NEW or not ev.to_me:
@@ -823,7 +878,8 @@ for ev in longpoll.listen():
             ("/pics", "Show saved photos"),
             ("/rearrange", "Rearrange your planner events"),
             ("/today", "Show today's events"),
-            ("/extend", "Extend existing event")
+            ("/extend", "Extend existing event"),
+            ("/remind", "Set custom reminders")
         ]
         send(uid, "📖 Available commands:")
         for cmd, desc in commands:
@@ -860,6 +916,19 @@ for ev in longpoll.listen():
             set_state(uid, STATE_EXTEND_SELECT)
             send(uid, "Select event number to extend:")
             send_batch(uid, "msgs", "offset")
+        continue
+
+    if text.lower() == "/remind":
+        events = read_events(uid)
+        if not events:
+            send(uid, "No events to set reminders for.", main_menu_kb())
+        else:
+            clear_data(uid)
+            set_data(uid, "remind_msgs", group_by_day(events))
+            set_data(uid, "remind_offset", 0)
+            set_state(uid, STATE_REMIND_SELECT)
+            send(uid, "Select event number to set reminder for:")
+            send_batch(uid, "remind_msgs", "remind_offset")
         continue
 
     if text.lower() == "/today":
@@ -1599,6 +1668,85 @@ for ev in longpoll.listen():
         clear_data(uid)
         set_state(uid, STATE_START)
         continue
+
+
+
+    # ===== REMIND FLOW: SELECT EVENT =====
+    if state == STATE_REMIND_SELECT:
+        if text == "Next":
+            send_batch(uid, "remind_msgs", "remind_offset")
+        else:
+            try:
+                idx = int(text) - 1
+                events = read_events(uid)
+                if 0 <= idx < len(events):
+                    parsed = parse_event_line(events[idx])
+                    if not parsed:
+                        send(uid, "Failed to parse event.", nav_kb(True))
+                        continue
+                    dt, desc, hashtag, uid_event, raw_line = parsed
+                    set_data(uid, "remind_event_idx", idx)
+                    set_data(uid, "remind_event_uid", uid_event)
+                    set_data(uid, "remind_event_dt", dt.isoformat())
+                    set_data(uid, "remind_event_desc", f"{desc} {hashtag}".strip())
+                    set_state(uid, STATE_REMIND_COUNT)
+                    send(uid, f"Selected: {dt.strftime('%Y-%m-%d %H:%M')} {desc} {hashtag}")
+                    send(uid, "How many reminders do you want to set for this event? (1-5):")
+                else:
+                    send(uid, "Invalid number.", nav_kb(True))
+            except:
+                send(uid, "Enter a valid number.", nav_kb(True))
+        continue
+
+    # ===== REMIND FLOW: NUMBER OF REMINDERS =====
+    if state == STATE_REMIND_COUNT:
+        if text.isdigit() and 1 <= int(text) <= 5:
+            count = int(text)
+            set_data(uid, "remind_count", count)
+            set_data(uid, "remind_index", 0)
+            set_data(uid, "remind_minutes_list", [])
+            set_state(uid, STATE_REMIND_MINUTES)
+            send(uid, f"Reminder 1 of {count}: How many minutes before the event should I notify you?")
+        else:
+            send(uid, "Please enter a number between 1 and 5:")
+        continue
+
+    # ===== REMIND FLOW: MINUTES FOR EACH REMINDER =====
+    if state == STATE_REMIND_MINUTES:
+        if text.isdigit() and int(text) >= 0:
+            minutes = int(text)
+            minutes_list = get_data(uid, "remind_minutes_list", [])
+            minutes_list.append(minutes)
+            set_data(uid, "remind_minutes_list", minutes_list)
+            current_index = get_data(uid, "remind_index", 0) + 1
+            total_count = get_data(uid, "remind_count", 1)
+            if current_index < total_count:
+                set_data(uid, "remind_index", current_index)
+                send(uid, f"Reminder {current_index + 1} of {total_count}: How many minutes before the event?")
+            else:
+                # All reminders collected, save them
+                event_uid = get_data(uid, "remind_event_uid")
+                event_dt_str = get_data(uid, "remind_event_dt")
+                event_desc = get_data(uid, "remind_event_desc")
+                event_dt = datetime.fromisoformat(event_dt_str)
+                for mins in minutes_list:
+                    reminder_key = f"{uid}|{event_uid}|{event_dt_str}|custom_{mins}m"
+                    with reminder_lock:
+                        sent_reminders[reminder_key] = {
+                            "minutes_before": mins,
+                            "notified": False,
+                            "event_desc": event_desc
+                        }
+                    save_sent_reminders(sent_reminders)
+                send(uid, f"✅ Set {len(minutes_list)} custom reminder(s) for: {event_desc}")
+                send(uid, f"Notifications will be sent {', '.join(str(m) + 'm' for m in minutes_list)} before the event.")
+                clear_data(uid)
+                set_state(uid, STATE_START)
+                send(uid, "Menu:", main_menu_kb())
+        else:
+            send(uid, "Please enter a valid number of minutes (0 or more):")
+        continue
+
 
     # ===== EDIT INPUT =====
     if state == STATE_EDIT_INPUT:
