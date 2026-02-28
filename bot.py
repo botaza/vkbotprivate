@@ -244,6 +244,49 @@ def daily_digest_worker():
             log.error(f"Daily digest worker error: {e}")
             time.sleep(60)
 
+
+
+def daily_tomorrow_reminder_worker():
+    """Send full tomorrow's events reminder at 22:00 (10 PM)"""
+    last_run_date = None
+    while True:
+        try:
+            now = datetime.now()
+            today = now.date()
+            tomorrow = today + timedelta(days=1)
+            # Run at 22:00 (10 PM), only once per day
+            if now.hour == 22 and now.minute < 2:
+                if last_run_date == today:
+                    time.sleep(30)
+                    continue
+                last_run_date = today
+                with state_lock:
+                    uids = list(states.keys())
+                    for uid in uids:
+                        events = read_events(uid)
+                        tomorrows_events = []
+                        for l in events:
+                            parsed = parse_event_line(l)
+                            if not parsed:
+                                continue
+                            dt, _, _, _, raw = parsed
+                            if dt.date() == tomorrow:
+                                tomorrows_events.append(raw)
+                        if tomorrows_events:
+                            weekday = tomorrow.strftime("%A")
+                            msg = f"📅 Events for tomorrow ({tomorrow} {weekday}):\n" + "\n".join(tomorrows_events)
+                            try:
+                                send(int(uid), msg)
+                                log.info(f"Sent tomorrow's events reminder to {uid}")
+                            except Exception as e:
+                                log.error(f"Tomorrow reminder send failed for {uid}: {e}")
+                time.sleep(20)
+            time.sleep(60)
+        except Exception as e:
+            log.error(f"Daily tomorrow reminder worker error: {e}")
+            time.sleep(60)
+
+
 def events_for_date(uid, target_date):
     events = read_events(uid)
     matched = []
@@ -731,13 +774,15 @@ def edit_menu_kb():
 
 def quick_commands_kb():
     kb = VkKeyboard(one_time=True)
-    kb.add_button("/today", VkKeyboardColor.PRIMARY)
-    kb.add_button("/number", VkKeyboardColor.PRIMARY)
-    kb.add_button("/extend", VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button("/date", VkKeyboardColor.PRIMARY)
     kb.add_button("/pics", VkKeyboardColor.PRIMARY)
-    kb.add_button("/remind", VkKeyboardColor.PRIMARY)    
+    kb.add_button("/number", VkKeyboardColor.PRIMARY)
+    kb.add_button("/date", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("/remind", VkKeyboardColor.PRIMARY)  
+    kb.add_button("/extend", VkKeyboardColor.PRIMARY)
+    kb.add_line()   
+    kb.add_button("/today", VkKeyboardColor.PRIMARY)    
+    kb.add_button("/tomorrow", VkKeyboardColor.PRIMARY)      
     kb.add_line()
     kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
@@ -855,6 +900,7 @@ threading.Thread(target=daily_control_reminder_worker, daemon=True).start()
 threading.Thread(target=daily_pers_reminder_worker, daemon=True).start()
 threading.Thread(target=multi_day_reminder_worker, daemon=True).start()
 threading.Thread(target=custom_reminder_worker, daemon=True).start()
+threading.Thread(target=daily_tomorrow_reminder_worker, daemon=True).start()
 
 for ev in longpoll.listen():
     if ev.type != VkEventType.MESSAGE_NEW or not ev.to_me:
@@ -878,6 +924,7 @@ for ev in longpoll.listen():
             ("/pics", "Show saved photos"),
             ("/rearrange", "Rearrange your planner events"),
             ("/today", "Show today's events"),
+            ("/tomorrow", "Show next day's events"),
             ("/extend", "Extend existing event"),
             ("/remind", "Set custom reminders")
         ]
@@ -946,6 +993,23 @@ for ev in longpoll.listen():
         set_state(uid, STATE_START)
         send(uid, "Menu:", main_menu_kb())
         continue
+
+    if text.lower() == "/tomorrow":
+        tomorrow = (datetime.now() + timedelta(days=1)).date()
+        weekday = (datetime.now() + timedelta(days=1)).strftime("%A")
+        send(uid, f"📅 Tomorrow: {tomorrow} ({weekday})")
+        matches = events_for_date(uid, tomorrow)
+        if not matches:
+            send(uid, "No events for tomorrow.")
+        else:
+            send(uid, "Tomorrow's events:")
+            for line in matches:
+                send(uid, line)
+        clear_data(uid)
+        set_state(uid, STATE_START)
+        send(uid, "Menu:", main_menu_kb())
+        continue
+
 
     if text.lower() == "/pics":
         send_photos(uid)
@@ -1023,6 +1087,22 @@ for ev in longpoll.listen():
             clear_data(uid)
             set_state(uid, STATE_START)
             send(uid, "Menu:", main_menu_kb())
+ 
+         elif text == "/tomorrow":
+            tomorrow = (datetime.now() + timedelta(days=1)).date()
+            weekday = (datetime.now() + timedelta(days=1)).strftime("%A")
+            send(uid, f"📅 Tomorrow: {tomorrow} ({weekday})")
+            matches = events_for_date(uid, tomorrow)
+            if not matches:
+                send(uid, "No events for tomorrow.")
+            else:
+                send(uid, "Tomorrow's events:")
+                for line in matches:
+                    send(uid, line)
+            clear_data(uid)
+            set_state(uid, STATE_START)
+            send(uid, "Menu:", main_menu_kb())
+ 
         elif text == "/number":
             clear_data(uid)
             set_state(uid, STATE_NUMBER_QUERY)
