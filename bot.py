@@ -1067,7 +1067,7 @@ for ev in longpoll.listen():
             send(uid, "Menu:", main_menu_kb())
         continue
 
-correct indentation
+
 
     # ===== QUICK COMMANDS MENU =====
     if state == STATE_QUICK_COMMANDS:
@@ -1089,8 +1089,7 @@ correct indentation
             clear_data(uid)
             set_state(uid, STATE_START)
             send(uid, "Menu:", main_menu_kb())
- 
-         elif text == "/tomorrow":
+        elif text == "/tomorrow":
             tomorrow = (datetime.now() + timedelta(days=1)).date()
             weekday = (datetime.now() + timedelta(days=1)).strftime("%A")
             send(uid, f"📅 Tomorrow: {tomorrow} ({weekday})")
@@ -1104,7 +1103,6 @@ correct indentation
             clear_data(uid)
             set_state(uid, STATE_START)
             send(uid, "Menu:", main_menu_kb())
- 
         elif text == "/number":
             clear_data(uid)
             set_state(uid, STATE_NUMBER_QUERY)
@@ -1124,6 +1122,7 @@ correct indentation
         else:
             send(uid, "Choose quick command:", quick_commands_kb())
         continue
+
 
     # ===== DELETE MENU SUBMENU =====
     if state == STATE_DELETE_MENU:
