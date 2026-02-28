@@ -838,7 +838,7 @@ def read_photo_entries(uid):
 # ================= VK =================
 vk_session = vk_api.VkApi(token=TOKEN)
 vk = vk_session.get_api()
-longpoll = VkLongPoll(vk_session)
+longpoll = VkLongPoll(vk_session, mode=2)
 
 def send(uid, text, kb=None):
     if not text:
