@@ -2,7 +2,7 @@ import vk_api
 from vk_api.longpoll import VkLongPoll, VkEventType
 from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List, Dict, Any
 import os, json, logging
 from logging.handlers import RotatingFileHandler
 import threading
@@ -26,6 +26,7 @@ STATE_FILE = "states.json"
 PLANNER_DIR = "planners"
 DAYS_PER_BATCH = 4
 os.makedirs(PLANNER_DIR, exist_ok=True)
+WEEKDAY_EMOJI = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣"]
 
 # ================= STATES =================
 STATE_START = "start"
@@ -74,6 +75,193 @@ with open(TOKEN_FILE, "r", encoding="utf-8") as f:
 # ================= THREAD SAFETY (Enhancement 1) =================
 state_lock = threading.RLock()
 reminder_lock = threading.RLock()
+
+# ================= VK =================
+vk_session = vk_api.VkApi(token=TOKEN)
+vk = vk_session.get_api()
+longpoll = VkLongPoll(vk_session, mode=2)
+
+def send(uid, text, kb=None):
+    if not text:
+        text = "."
+    vk.messages.send(user_id=uid, random_id=0, message=text, keyboard=kb)
+
+
+
+
+# ================= KEYBOARDS =================
+def year_kb():
+    kb = VkKeyboard(one_time=True)
+    now = datetime.now().year
+    kb.add_button(str(now), VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button(str(now + 1), VkKeyboardColor.PRIMARY)
+    return kb.get_keyboard()
+
+def month_kb():
+    kb = VkKeyboard(one_time=True)
+    now = datetime.now().month
+    kb.add_button(f"{now:02d}", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button(f"{((now % 12) + 1):02d}", VkKeyboardColor.PRIMARY)
+    return kb.get_keyboard()
+
+def day_kb():
+    kb = VkKeyboard(one_time=True)
+    today = datetime.now().day
+    tomorrow = (datetime.now() + timedelta(days=1)).day
+    kb.add_button(str(today), VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button(str(tomorrow), VkKeyboardColor.PRIMARY)
+    return kb.get_keyboard()
+
+def hour_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("08", VkKeyboardColor.PRIMARY)
+    kb.add_button("10", VkKeyboardColor.PRIMARY)
+    kb.add_button("11", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("13", VkKeyboardColor.PRIMARY)
+    kb.add_button("15", VkKeyboardColor.PRIMARY)
+    kb.add_button("16", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("18", VkKeyboardColor.PRIMARY)
+    kb.add_button("20", VkKeyboardColor.PRIMARY)
+    kb.add_button("23", VkKeyboardColor.PRIMARY)
+    return kb.get_keyboard()
+
+def minute_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("00", VkKeyboardColor.PRIMARY)
+    kb.add_button("10", VkKeyboardColor.PRIMARY)
+    kb.add_button("30", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("40", VkKeyboardColor.PRIMARY)
+    kb.add_button("50", VkKeyboardColor.PRIMARY)
+    kb.add_button("59", VkKeyboardColor.PRIMARY)
+    return kb.get_keyboard()
+
+def duration_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("?", VkKeyboardColor.PRIMARY)
+    kb.add_button("60", VkKeyboardColor.PRIMARY)
+    kb.add_button("90", VkKeyboardColor.PRIMARY)
+    return kb.get_keyboard()
+
+def place_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("?", VkKeyboardColor.PRIMARY)
+    return kb.get_keyboard()
+
+def delete_menu_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("Del P", VkKeyboardColor.NEGATIVE)
+    kb.add_button("Del Hash", VkKeyboardColor.NEGATIVE)
+    kb.add_button("Del ID", VkKeyboardColor.NEGATIVE)
+    kb.add_line()
+    kb.add_button("Del Ar", VkKeyboardColor.NEGATIVE)
+    kb.add_button("Del C", VkKeyboardColor.NEGATIVE)
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def list_menu_main_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("List events", VkKeyboardColor.PRIMARY)
+    kb.add_button("List completed", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("Filter by hashtag", VkKeyboardColor.SECONDARY)
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def edit_menu_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("Edit event", VkKeyboardColor.SECONDARY)
+    kb.add_button("Edit completed", VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def quick_commands_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("/pics", VkKeyboardColor.PRIMARY)
+    kb.add_button("/number", VkKeyboardColor.PRIMARY)
+    kb.add_button("/date", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("/remind", VkKeyboardColor.PRIMARY)  
+    kb.add_button("/extend", VkKeyboardColor.PRIMARY)
+    kb.add_line()   
+    kb.add_button("/today", VkKeyboardColor.PRIMARY)    
+    kb.add_button("/tomorrow", VkKeyboardColor.PRIMARY)      
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def main_menu_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("Suggest", VkKeyboardColor.POSITIVE)
+    kb.add_button("Quick note", VkKeyboardColor.POSITIVE)
+    kb.add_button("Complete", VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button("List", VkKeyboardColor.PRIMARY)
+    kb.add_button("Delete", VkKeyboardColor.NEGATIVE)
+    kb.add_button("Edit", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("Quick Commands", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def list_menu_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("Show all", VkKeyboardColor.PRIMARY)
+    kb.add_button("Filter by hashtag", VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+
+def nav_kb(has_next):
+    kb = VkKeyboard(one_time=True)
+    if has_next:
+        kb.add_button("Next", VkKeyboardColor.PRIMARY)
+        kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    else:
+        kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def recurrence_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("One-time", VkKeyboardColor.SECONDARY)
+    kb.add_button("Weekly", VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("Biweekly", VkKeyboardColor.SECONDARY)
+    kb.add_button("Monthly", VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("Yearly", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def extend_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("Weekly", VkKeyboardColor.PRIMARY)
+    kb.add_button("Biweekly", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("Monthly", VkKeyboardColor.PRIMARY)
+    kb.add_button("Annually", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def remind_minutes_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("5", VkKeyboardColor.PRIMARY)
+    kb.add_button("10", VkKeyboardColor.PRIMARY)
+    kb.add_button("30", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("120", VkKeyboardColor.PRIMARY)
+    kb.add_button("180", VkKeyboardColor.PRIMARY)
+    kb.add_button("720", VkKeyboardColor.PRIMARY)
+    return kb.get_keyboard()
+
+
 
 # ================= STATE STORAGE =================
 def load_states():
@@ -299,6 +487,8 @@ def events_for_date(uid, target_date):
             matched.append(raw)
     return matched
 
+# Patch for hourly_reminder_worker indentation error
+
 def hourly_reminder_worker():
     while True:
         try:
@@ -318,7 +508,9 @@ def hourly_reminder_worker():
                             with reminder_lock:
                                 if key in sent_reminders:
                                     continue
-                                msg = f"⏰ Reminder:\n{dt.strftime('%H:%M')} {desc} {hashtag}"
+                                # Use the full original line for the reminder
+                                full_event_line = l  # 'l' is the original line from the planner
+                                msg = f"⏰ Reminder:\n{full_event_line}"
                                 try:
                                     send(int(uid), msg)
                                     sent_reminders[key] = True
@@ -679,166 +871,8 @@ def send_batch(uid, key_msgs, key_offset):
     kb = nav_kb(data[key_offset] < len(msgs))
     send(uid, "Navigation:", kb)
 
-# ================= KEYBOARDS =================
-def year_kb():
-    kb = VkKeyboard(one_time=True)
-    now = datetime.now().year
-    kb.add_button(str(now), VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button(str(now + 1), VkKeyboardColor.PRIMARY)
-    return kb.get_keyboard()
-
-def month_kb():
-    kb = VkKeyboard(one_time=True)
-    now = datetime.now().month
-    kb.add_button(f"{now:02d}", VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button(f"{((now % 12) + 1):02d}", VkKeyboardColor.PRIMARY)
-    return kb.get_keyboard()
-
-def day_kb():
-    kb = VkKeyboard(one_time=True)
-    today = datetime.now().day
-    tomorrow = (datetime.now() + timedelta(days=1)).day
-    kb.add_button(str(today), VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button(str(tomorrow), VkKeyboardColor.PRIMARY)
-    return kb.get_keyboard()
-
-def hour_kb():
-    kb = VkKeyboard(one_time=True)
-    kb.add_button("08", VkKeyboardColor.PRIMARY)
-    kb.add_button("10", VkKeyboardColor.PRIMARY)
-    kb.add_button("11", VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button("13", VkKeyboardColor.PRIMARY)
-    kb.add_button("15", VkKeyboardColor.PRIMARY)
-    kb.add_button("16", VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button("18", VkKeyboardColor.PRIMARY)
-    kb.add_button("20", VkKeyboardColor.PRIMARY)
-    kb.add_button("23", VkKeyboardColor.PRIMARY)
-    return kb.get_keyboard()
-
-def minute_kb():
-    kb = VkKeyboard(one_time=True)
-    kb.add_button("00", VkKeyboardColor.PRIMARY)
-    kb.add_button("10", VkKeyboardColor.PRIMARY)
-    kb.add_button("30", VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button("40", VkKeyboardColor.PRIMARY)
-    kb.add_button("50", VkKeyboardColor.PRIMARY)
-    kb.add_button("59", VkKeyboardColor.PRIMARY)
-    return kb.get_keyboard()
-
-def duration_kb():
-    kb = VkKeyboard(one_time=True)
-    kb.add_button("?", VkKeyboardColor.PRIMARY)
-    kb.add_button("60", VkKeyboardColor.PRIMARY)
-    kb.add_button("90", VkKeyboardColor.PRIMARY)
-    return kb.get_keyboard()
-
-def place_kb():
-    kb = VkKeyboard(one_time=True)
-    kb.add_button("?", VkKeyboardColor.PRIMARY)
-    return kb.get_keyboard()
-
-def delete_menu_kb():
-    kb = VkKeyboard(one_time=True)
-    kb.add_button("Del P", VkKeyboardColor.NEGATIVE)
-    kb.add_button("Del Hash", VkKeyboardColor.NEGATIVE)
-    kb.add_button("Del ID", VkKeyboardColor.NEGATIVE)
-    kb.add_line()
-    kb.add_button("Del Ar", VkKeyboardColor.NEGATIVE)
-    kb.add_button("Del C", VkKeyboardColor.NEGATIVE)
-    kb.add_line()
-    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
-    return kb.get_keyboard()
-
-def list_menu_main_kb():
-    kb = VkKeyboard(one_time=True)
-    kb.add_button("List events", VkKeyboardColor.PRIMARY)
-    kb.add_button("List completed", VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button("Filter by hashtag", VkKeyboardColor.SECONDARY)
-    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
-    return kb.get_keyboard()
-
-def edit_menu_kb():
-    kb = VkKeyboard(one_time=True)
-    kb.add_button("Edit event", VkKeyboardColor.SECONDARY)
-    kb.add_button("Edit completed", VkKeyboardColor.SECONDARY)
-    kb.add_line()
-    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
-    return kb.get_keyboard()
-
-def quick_commands_kb():
-    kb = VkKeyboard(one_time=True)
-    kb.add_button("/pics", VkKeyboardColor.PRIMARY)
-    kb.add_button("/number", VkKeyboardColor.PRIMARY)
-    kb.add_button("/date", VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button("/remind", VkKeyboardColor.PRIMARY)  
-    kb.add_button("/extend", VkKeyboardColor.PRIMARY)
-    kb.add_line()   
-    kb.add_button("/today", VkKeyboardColor.PRIMARY)    
-    kb.add_button("/tomorrow", VkKeyboardColor.PRIMARY)      
-    kb.add_line()
-    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
-    return kb.get_keyboard()
-
-def main_menu_kb():
-    kb = VkKeyboard(one_time=True)
-    kb.add_button("Suggest", VkKeyboardColor.POSITIVE)
-    kb.add_button("Quick note", VkKeyboardColor.POSITIVE)
-    kb.add_button("Complete", VkKeyboardColor.POSITIVE)
-    kb.add_line()
-    kb.add_button("List", VkKeyboardColor.PRIMARY)
-    kb.add_button("Delete", VkKeyboardColor.NEGATIVE)
-    kb.add_button("Edit", VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button("Quick Commands", VkKeyboardColor.SECONDARY)
-    return kb.get_keyboard()
-
-def list_menu_kb():
-    kb = VkKeyboard(one_time=True)
-    kb.add_button("Show all", VkKeyboardColor.PRIMARY)
-    kb.add_button("Filter by hashtag", VkKeyboardColor.SECONDARY)
-    kb.add_line()
-    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
-    return kb.get_keyboard()
 
 
-def nav_kb(has_next):
-    kb = VkKeyboard(one_time=True)
-    if has_next:
-        kb.add_button("Next", VkKeyboardColor.PRIMARY)
-        kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
-    else:
-        kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
-    return kb.get_keyboard()
-
-def recurrence_kb():
-    kb = VkKeyboard(one_time=True)
-    kb.add_button("One-time", VkKeyboardColor.SECONDARY)
-    kb.add_button("Weekly", VkKeyboardColor.SECONDARY)
-    kb.add_line()
-    kb.add_button("Biweekly", VkKeyboardColor.SECONDARY)
-    kb.add_button("Monthly", VkKeyboardColor.SECONDARY)
-    kb.add_line()
-    kb.add_button("Yearly", VkKeyboardColor.SECONDARY)
-    return kb.get_keyboard()
-
-def extend_kb():
-    kb = VkKeyboard(one_time=True)
-    kb.add_button("Weekly", VkKeyboardColor.PRIMARY)
-    kb.add_button("Biweekly", VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button("Monthly", VkKeyboardColor.PRIMARY)
-    kb.add_button("Annually", VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
-    return kb.get_keyboard()
 
 # ================= REMINDER TRACKING =================
 def load_sent_reminders():
@@ -870,7 +904,7 @@ def send_photos(uid):
         peer_id, msg_id = ref.split("|")
         if desc:
             send(uid, f"Photo {i}:\n{desc}")
-        vk.messages.send(peer_id=uid, random_id=0, forward_messages=int(msg_id))
+        vk.messages.send(user_id=uid, random_id=0, forward_messages=int(msg_id))
     send(uid, "Menu:", main_menu_kb())
 
 def read_photo_entries(uid):
@@ -880,15 +914,7 @@ def read_photo_entries(uid):
     with open(path, "r", encoding="utf-8") as f:
         return [l.rstrip() for l in f if l.strip()]
 
-# ================= VK =================
-vk_session = vk_api.VkApi(token=TOKEN)
-vk = vk_session.get_api()
-longpoll = VkLongPoll(vk_session, mode=2)
 
-def send(uid, text, kb=None):
-    if not text:
-        text = "."
-    vk.messages.send(user_id=uid, random_id=0, message=text, keyboard=kb)
 
 
 
@@ -1787,7 +1813,7 @@ for ev in longpoll.listen():
             set_data(uid, "remind_index", 0)
             set_data(uid, "remind_minutes_list", [])
             set_state(uid, STATE_REMIND_MINUTES)
-            send(uid, f"Reminder 1 of {count}: How many minutes before the event should I notify you?")
+            send(uid, f"Reminder 1 of {count}: How many minutes before the event should I notify you?", remind_minutes_kb())
         else:
             send(uid, "Please enter a number between 1 and 5:")
         continue
@@ -1803,7 +1829,7 @@ for ev in longpoll.listen():
             total_count = get_data(uid, "remind_count", 1)
             if current_index < total_count:
                 set_data(uid, "remind_index", current_index)
-                send(uid, f"Reminder {current_index + 1} of {total_count}: How many minutes before the event?")
+                send(uid, f"Reminder {current_index + 1} of {total_count}: How many minutes before the event?", remind_minutes_kb())
             else:
                 # All reminders collected, save them
                 event_uid = get_data(uid, "remind_event_uid")
@@ -1825,9 +1851,8 @@ for ev in longpoll.listen():
                 set_state(uid, STATE_START)
                 send(uid, "Menu:", main_menu_kb())
         else:
-            send(uid, "Please enter a valid number of minutes (0 or more):")
+            send(uid, "Please select or enter a valid number of minutes (0 or more):", remind_minutes_kb())
         continue
-
 
     # ===== EDIT INPUT =====
     if state == STATE_EDIT_INPUT:
