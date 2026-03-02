@@ -26,7 +26,6 @@ STATE_FILE = "states.json"
 PLANNER_DIR = "planners"
 DAYS_PER_BATCH = 4
 os.makedirs(PLANNER_DIR, exist_ok=True)
-WEEKDAY_EMOJI = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣"]
 
 # ================= STATES =================
 STATE_START = "start"
@@ -261,7 +260,15 @@ def remind_minutes_kb():
     kb.add_button("720", VkKeyboardColor.PRIMARY)
     return kb.get_keyboard()
 
-
+def hashtag_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("pers", VkKeyboardColor.PRIMARY)
+    kb.add_button("cons", VkKeyboardColor.PRIMARY)
+    kb.add_button("job", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("event", VkKeyboardColor.PRIMARY)
+    kb.add_button("control", VkKeyboardColor.PRIMARY)
+    return kb.get_keyboard()
 
 # ================= STATE STORAGE =================
 def load_states():
@@ -1355,14 +1362,20 @@ for ev in longpoll.listen():
     if state == STATE_SUGGEST_DESC:
         set_data(uid, "desc", text)
         set_state(uid, STATE_SUGGEST_HASHTAG)
-        send(uid, "Enter hashtag:")
+        send(uid, "Enter hashtag:", hashtag_kb())
         continue
 
     if state == STATE_SUGGEST_HASHTAG:
-        set_data(uid, "hashtag", text)
-        set_state(uid, STATE_SUGGEST_RECURRENCE)
-        send(uid, "Select recurrence:", recurrence_kb())
-        continue
+        if text in ["pers", "cons", "job", "event", "control"]:
+            set_data(uid, "hashtag", text)
+            set_state(uid, STATE_SUGGEST_RECURRENCE)
+            send(uid, f"Hashtag {text} accepted.")
+            send(uid, "Select recurrence:", recurrence_kb())
+        else:
+            set_data(uid, "hashtag", text)
+            set_state(uid, STATE_SUGGEST_RECURRENCE)
+            send(uid, "Select recurrence:", recurrence_kb())
+        # Remove the unconditional send() above
 
     if state == STATE_SUGGEST_RECURRENCE:
         recurrence_options = ["One-time", "Weekly", "Biweekly", "Monthly", "Yearly"]
