@@ -29,6 +29,7 @@ TOKEN_FILE = "token.txt"
 STATE_FILE = "states.json"
 PLANNER_DIR = "planners"
 DAYS_PER_BATCH = 4
+RECENT_ENTRIES_PER_PAGE = 7      # ← NEW  ← you can change to 8/12/15 etc
 os.makedirs(PLANNER_DIR, exist_ok=True)
 
 # ================= STATES =================
@@ -629,14 +630,82 @@ def format_inc_month_stats(uid, month_key):
     grand = totals[month_key].get("total", 0)
     return f"📈 {month_key} income — {grand:,.0f}"
 
-def format_recent_income(uid, month_key=None, limit=20):
+def format_recent_income(uid, month_key=None, page_size=RECENT_ENTRIES_PER_PAGE):
     entries = read_income(uid)
     if month_key:
         entries = [e for e in entries if e["dt"][:7] == month_key]
-    entries = list(reversed(entries[-limit:]))
-    return [format_inc_entry(e, i) for i, e in enumerate(entries)]
+
+    if not entries:
+        return ["No income recorded yet."]
+
+    # newest first
+    entries = list(reversed(entries))
+
+    pages = []
+    current_page = []
+    current_len = 0
+
+    for i, entry in enumerate(entries, 1):
+        line = format_inc_entry(entry, i-1)
+        line_len = len(line) + 1
+
+        if current_len + line_len > 3800 and current_page:
+            pages.append("\n".join(current_page))
+            current_page = []
+            current_len = 0
+
+        current_page.append(line)
+        current_len += line_len
+
+    if current_page:
+        pages.append("\n".join(current_page))
+
+    return pages
 
 
+def send_paginated_recent(uid, pages_key: str, menu_kb, empty_msg: str = "No records."):
+    """
+    pages_key — key in user data where list of pages is stored
+    menu_kb   — keyboard to show when finished (exp_menu_kb / inc_menu_kb)
+    """
+    data = user(uid)["data"]
+    pages = data.get(pages_key, [])
+
+    if not pages:
+        send(uid, empty_msg, menu_kb())
+        clear_data(uid)
+        return
+
+    offset = data.get("recent_offset", 0)
+
+    if offset >= len(pages):
+        # finished
+        if pages_key == "recent_pages" and u["state"] == STATE_EXP_MENU:
+            final_kb = exp_menu_kb()
+            prefix = "Expense history"
+        else:
+            final_kb = inc_menu_kb()
+            prefix = "Income history"
+        send(uid, f"—— End of {prefix} ——", final_kb())
+        clear_data(uid)
+        return
+
+    # send current page
+    text = pages[offset]
+    if offset == 0:
+        text = "📋 Recent (newest first):\n\n" + text
+
+    has_next = offset + 1 < len(pages)
+    kb = VkKeyboard(one_time=True)
+    if has_next:
+        kb.add_button("Next →", VkKeyboardColor.PRIMARY)
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+
+    send(uid, text, kb.get_keyboard())
+
+    # save next offset
+    data["recent_offset"] = offset + 1
+    save_states()
 
 # ================= EXPENSE FILE HELPERS =================
 EXPENSE_ARCHIVE_MONTHS = 3
@@ -799,12 +868,37 @@ def format_all_inc_month_totals(uid):
         lines.append(f" {mk} {amt:>10,.0f}")
     return "\n".join(lines)
 
-def format_recent_expenses(uid, month_key=None, limit=20):
+def format_recent_expenses(uid, month_key=None, page_size=RECENT_ENTRIES_PER_PAGE):
     entries = read_expenses(uid)
     if month_key:
         entries = [e for e in entries if e["dt"][:7] == month_key]
-    entries = list(reversed(entries[-limit:]))
-    return [format_entry(e, i) for i, e in enumerate(entries)]
+
+    if not entries:
+        return ["No expenses recorded yet."]
+
+    # newest first
+    entries = list(reversed(entries))
+
+    pages = []
+    current_page = []
+    current_len = 0
+
+    for i, entry in enumerate(entries, 1):
+        line = format_entry(entry, i-1)   # with index 1-based
+        line_len = len(line) + 1          # + newline
+
+        if current_len + line_len > 3800 and current_page:  # safe margin
+            pages.append("\n".join(current_page))
+            current_page = []
+            current_len = 0
+
+        current_page.append(line)
+        current_len += line_len
+
+    if current_page:
+        pages.append("\n".join(current_page))
+
+    return pages
 
 def recalc_all_totals(uid):
     all_entries = read_expenses(uid)
@@ -1842,11 +1936,16 @@ for ev in longpoll.listen():
         elif text == "📊 This month":
             mk = datetime.now().strftime("%Y-%m")
             send(uid, format_inc_month_stats(str(uid), mk))
-            history = format_recent_income(str(uid), month_key=mk)
-            send(uid, "\n".join(history) if history else "No income this month yet.")
-            send(uid, "Income menu:", inc_menu_kb())
+
+            pages = format_recent_income(str(uid), month_key=mk)
+            if len(pages) == 1 and "No income" in pages[0]:
+                send(uid, pages[0], inc_menu_kb())
+            else:
+                clear_data(uid)
+                set_data(uid, "recent_pages", pages)
+                set_data(uid, "recent_offset", 0)
+                send_paginated_recent(uid, "recent_pages", inc_menu_kb)
         elif text == "📅 By month":
-            # Reuse expense monthly totals display logic (you can make separate later)
             send(uid, format_all_inc_month_totals(str(uid)))
             set_state(uid, STATE_INC_MONTH_PICK)
             send(uid, "Pick a month:", exp_month_kb())
@@ -1881,9 +1980,14 @@ for ev in longpoll.listen():
         elif text == "📊 This month":
             mk = datetime.now().strftime("%Y-%m")
             send(uid, format_month_stats(str(uid), mk))
-            history = format_recent_expenses(str(uid), month_key=mk)
-            send(uid, "\n".join(history) if history else "No entries this month yet.")
-            send(uid, "Expense menu:", exp_menu_kb())
+            pages = format_recent_expenses(str(uid), month_key=mk)
+            if len(pages) == 1 and "No expenses" in pages[0]:
+                send(uid, pages[0], exp_menu_kb())
+            else:
+                clear_data(uid)
+                set_data(uid, "recent_pages", pages)
+                set_data(uid, "recent_offset", 0)
+                send_paginated_recent(uid, "recent_pages", exp_menu_kb)
         elif text == "📅 By month":
             send(uid, format_all_month_totals(str(uid)))
             set_state(uid, STATE_EXP_MONTH_PICK)
@@ -2873,6 +2977,27 @@ for ev in longpoll.listen():
                     send(uid, "Invalid number.", nav_kb(True))
             except:
                 send(uid, "Enter number.", nav_kb(True))
+        continue
+
+    # Pagination for recent expenses / income
+    if text == "Next" and u["state"] in [STATE_EXP_MENU, STATE_INC_MENU]:
+        pages_key = "recent_pages"
+        if "exp_" in u["state"]:
+            menu = exp_menu_kb
+        else:
+            menu = inc_menu_kb
+
+        send_paginated_recent(uid, pages_key, menu)
+        continue
+
+    if text == "Back to menu" and u["state"] in [STATE_EXP_MENU, STATE_INC_MENU]:
+        clear_data(uid)
+        if u["state"] == STATE_EXP_MENU:
+            set_state(uid, STATE_EXP_MENU)
+            send(uid, "Expense menu:", exp_menu_kb())
+        else:
+            set_state(uid, STATE_INC_MENU)
+            send(uid, "Income menu:", inc_menu_kb())
         continue
 
     # ===== DELETE PHOTOS =====
