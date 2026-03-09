@@ -372,17 +372,20 @@ def exp_category_kb():
     kb = VkKeyboard(one_time=True)
     kb.add_button("🍔 food",       VkKeyboardColor.PRIMARY)
     kb.add_button("🚗 transport",  VkKeyboardColor.PRIMARY)
+    kb.add_button("✈️ travel",  VkKeyboardColor.PRIMARY)
     kb.add_line()
     kb.add_button("🏠 housing",    VkKeyboardColor.PRIMARY)
     kb.add_button("💊 health",     VkKeyboardColor.PRIMARY)
     kb.add_line()
     kb.add_button("🎮 fun",        VkKeyboardColor.PRIMARY)
     kb.add_button("🛒 shop",       VkKeyboardColor.PRIMARY)
+    kb.add_button("➡️ transfer",       VkKeyboardColor.PRIMARY)
     kb.add_line()
-    kb.add_button("💰 savings",    VkKeyboardColor.PRIMARY)
+    kb.add_button("🎓 education",    VkKeyboardColor.PRIMARY)
     kb.add_button("🧾 bills",      VkKeyboardColor.PRIMARY)
     kb.add_line()
     kb.add_button("🎁 gifts",      VkKeyboardColor.PRIMARY)
+    kb.add_button("📲 sbp",      VkKeyboardColor.PRIMARY)
     kb.add_button("📦 other",      VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
@@ -504,15 +507,19 @@ def next_uid(uid):
 CATEGORIES = [
     ("🍔", "food"),
     ("🚗", "transport"),
+    ("✈️", "travel"),      # ← new
     ("🏠", "housing"),
     ("💊", "health"),
     ("🎮", "fun"),
     ("🛒", "shop"),
-    ("💰", "savings"),
+    ("➡️", "transfer"),      # ← new
+    ("🎓", "education"),
     ("🧾", "bills"),
     ("🎁", "gifts"),
+    ("📲", "sbp"),
     ("📦", "other"),
 ]
+
 CAT_SLUGS = [c[1] for c in CATEGORIES]
 CAT_LABEL_MAP = {f"{e} {s}": s for e, s in CATEGORIES}
 for s in CAT_SLUGS:
@@ -1926,16 +1933,26 @@ for ev in longpoll.listen():
                 dt=dt_for_expense,
                 tool=tool
             )
+
+            if category == "transfer":
+                transfer_desc = f"Transfer{': ' + desc if desc else ''}"
+                save_income(str(uid), amount, transfer_desc, dt=dt_for_expense)
+
+            if tool.lower() == "cash":
+                cash_desc = f"Cash expense{': ' + desc if desc else ''}"
+                save_income(str(uid), -amount, cash_desc, dt=dt_for_expense)
             
             em    = _cat_emoji(category)
             tool_str = f"  → {tool.upper()}" if tool != "— skip —" else ""
             mk    = selected_date.strftime("%Y-%m")
             month_tot = read_totals(str(uid)).get(mk, {}).get("total", 0)
             note_line = f" 📝 {desc}" if desc else ""
+            inc_note = "\n📈 Auto-added to income" if category == "transfer" else (
+           "\n💵 Deducted from income total" if tool.lower() == "cash" else "")
             
             send(uid,
                 f"✅ {em} {amount:,.0f}{note_line}{tool_str}\n"
-                f"📊 {mk} total: {month_tot:,.0f}",
+                f"📊 {mk} total: {month_tot:,.0f}{inc_note}",
                 exp_menu_kb()
             )
             clear_data(uid)
