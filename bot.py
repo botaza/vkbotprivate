@@ -84,6 +84,7 @@ STATE_EXP_LIST       = "exp_list"
 STATE_EXP_DELETE     = "exp_delete"
 STATE_EXP_STATS      = "exp_stats"
 STATE_EXP_MONTH_PICK = "exp_month_pick"
+STATE_EXP_TOOL = "exp_tool"
 # Income states (parallel to expenses)
 STATE_INC_MENU        = "inc_menu"
 STATE_INC_DATE_CHOICE = "inc_date_choice"
@@ -414,6 +415,25 @@ def exp_month_kb():
     return kb.get_keyboard()
 
 
+def exp_tool_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("gp",   VkKeyboardColor.PRIMARY)
+    kb.add_button("hal",  VkKeyboardColor.PRIMARY)
+    kb.add_button("sb",   VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("ren",  VkKeyboardColor.PRIMARY)
+    kb.add_button("oz",   VkKeyboardColor.PRIMARY)
+    kb.add_button("ya",   VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("cert", VkKeyboardColor.PRIMARY)
+    kb.add_button("cash", VkKeyboardColor.PRIMARY)
+    kb.add_button("other",VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("— skip —", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+
+
 def hashtag_kb():
     kb = VkKeyboard(one_time=True)
     kb.add_button("pers", VkKeyboardColor.PRIMARY)
@@ -693,10 +713,11 @@ def next_exp_id(uid):
         save_states()
         return f"e{val}"
 
-def save_expense(uid, amount, category, desc, dt: datetime = None):
+
+def save_expense(uid, amount, category, desc, dt: datetime = None, tool: str = None):
     if dt is None:
         dt = datetime.now()
-    
+   
     entry = {
         "id": next_exp_id(uid),
         "dt": dt.strftime("%Y-%m-%dT%H:%M"),
@@ -704,11 +725,15 @@ def save_expense(uid, amount, category, desc, dt: datetime = None):
         "category": category,
         "desc": desc,
     }
+    if tool and tool != "— skip —":
+        entry["tool"] = tool.lower().strip()
+
     entries = read_expenses(uid)
     entries.append(entry)
     write_expenses(uid, entries)
     _add_to_totals(uid, entry)
     return entry
+
 
 def delete_expense_by_index(uid, idx):
     entries = read_expenses(uid)
@@ -720,12 +745,16 @@ def delete_expense_by_index(uid, idx):
     return removed
 
 def format_entry(entry, idx=None):
-    dt  = entry["dt"][5:16].replace("T", " ")
-    em  = _cat_emoji(entry["category"])
+    dt = entry["dt"][5:16].replace("T", " ")          # e.g. "03-09 14:30"
+    em = _cat_emoji(entry["category"])
     amt = f"{entry['amount']:,.0f}"
-    desc = f"  {entry['desc']}" if entry.get("desc") else ""
+    
+    desc_part = f" {entry['desc']}" if entry.get("desc") else ""
+    tool_part = f"  → {entry['tool'].upper()}" if entry.get("tool") else ""
+    
     prefix = f"{idx+1}. " if idx is not None else ""
-    return f"{prefix}{dt} {em}{amt}{desc}"
+    
+    return f"{prefix}{dt} {em}{amt}{desc_part}{tool_part}"
 
 def format_month_stats(uid, month_key):
     totals = read_totals(uid)
@@ -1554,11 +1583,11 @@ for ev in longpoll.listen():
         continue
 
     # ===== BACK TO MENU (GLOBAL) =====
-    if text == "Back to menu":
-        clear_data(uid)
-        set_state(uid, STATE_START)
-        send(uid, "Menu:", main_menu_kb())
-        continue
+# =====    if text == "Back to menu":
+# =====        clear_data(uid)
+# =====        set_state(uid, STATE_START)
+# =====        send(uid, "Menu:", main_menu_kb())
+# =====        continue
 
     # ===== START MENU =====
     if state == STATE_START:
@@ -1870,6 +1899,52 @@ for ev in longpoll.listen():
         continue
 
     # ===== EXPENSE: AMOUNT =====
+
+    # ===== EXPENSE: PAYMENT TOOL =====
+    if state == STATE_EXP_TOOL:
+        tool = text.strip()
+        valid_tools = {"gp", "hal", "sb", "ren", "oz", "ya", "cert", "cash", "other", "— skip —"}
+        
+        if tool.lower() in valid_tools or tool == "— skip —":
+            amount    = get_data(uid, "exp_amount")
+            category  = get_data(uid, "exp_category")
+            desc      = get_data(uid, "exp_desc", "")
+            exp_date_str = get_data(uid, "exp_date")
+            
+            if exp_date_str is None:
+                exp_date_str = datetime.now().strftime("%Y-%m-%d")
+                
+            selected_date = datetime.strptime(exp_date_str, "%Y-%m-%d").date()
+            dt_for_expense = datetime.combine(selected_date, datetime.min.time())
+            
+            # Save with tool
+            entry = save_expense(
+                str(uid),
+                amount,
+                category,
+                desc,
+                dt=dt_for_expense,
+                tool=tool
+            )
+            
+            em    = _cat_emoji(category)
+            tool_str = f"  → {tool.upper()}" if tool != "— skip —" else ""
+            mk    = selected_date.strftime("%Y-%m")
+            month_tot = read_totals(str(uid)).get(mk, {}).get("total", 0)
+            note_line = f" 📝 {desc}" if desc else ""
+            
+            send(uid,
+                f"✅ {em} {amount:,.0f}{note_line}{tool_str}\n"
+                f"📊 {mk} total: {month_tot:,.0f}",
+                exp_menu_kb()
+            )
+            clear_data(uid)
+            set_state(uid, STATE_EXP_MENU)
+        else:
+            send(uid, "Choose payment method or skip:", exp_tool_kb())
+        continue
+
+
 # ────────────────────────────────────────────────
 #  New date selection flow
 # ────────────────────────────────────────────────
@@ -2225,29 +2300,16 @@ for ev in longpoll.listen():
     # ===== EXPENSE: DESC =====
     if state == STATE_EXP_DESC:
         desc = "" if text == "— skip —" else text.strip()
+        set_data(uid, "exp_desc", desc)
         amount   = get_data(uid, "exp_amount")
         category = get_data(uid, "exp_category")
 
-        exp_date_str = get_data(uid, "exp_date")
-        if exp_date_str is None:
-            # fallback — should never happen, but good to have
-            exp_date_str = datetime.now().strftime("%Y-%m-%d")
-
-        selected_date = datetime.strptime(exp_date_str, "%Y-%m-%d").date()
-        dt_for_expense = datetime.combine(selected_date, datetime.min.time())
-
-        entry = save_expense(str(uid), amount, category, desc, dt=dt_for_expense)
-
-        em = _cat_emoji(category)
-        mk = selected_date.strftime("%Y-%m")
-        month_tot = read_totals(str(uid)).get(mk, {}).get("total", 0)
-
-        note_line = f"  📝 {desc}" if desc else ""
-
-        send(uid, f"✅ {em} {amount:,.0f}{note_line}\n📊 {mk} total: {month_tot:,.0f}", exp_menu_kb())
-
-        clear_data(uid)
-        set_state(uid, STATE_EXP_MENU)
+        send(uid,
+            f"Amount: {amount:,.0f} • {category}\n"
+            f"Note: {desc or '—'}",
+            exp_tool_kb()
+        )
+        set_state(uid, STATE_EXP_TOOL)
         continue
 
     # ===== EXPENSE: MONTH PICK =====
