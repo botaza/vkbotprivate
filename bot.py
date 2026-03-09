@@ -2155,7 +2155,7 @@ for ev in longpoll.listen():
 
         elif text == "For yesterday":
             yesterday = datetime.now().date() - timedelta(days=1)
-            set_data(uid, "exp_date", yesterday)
+            set_data(uid, "exp_date", yesterday.strftime("%Y-%m-%d")) # same result
             set_state(uid, STATE_EXP_AMOUNT)
             send(uid, f"Adding expense for yesterday ({yesterday}):")
             send(uid, "💸 Enter amount:")
