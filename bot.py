@@ -9,14 +9,18 @@ import threading
 import calendar
 import time
 import re
+import sys
 
 # ================= LOGGING (Enhancement 4: Rotation) =================
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
-handler = RotatingFileHandler("bot.log", maxBytes=5*1024*1024, backupCount=3)
+handler = RotatingFileHandler("bot.log", maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 handler.setFormatter(formatter)
 log.addHandler(handler)
+stream_handler = logging.StreamHandler(stream=open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1) if hasattr(sys.stdout, 'fileno') else sys.stdout)
+stream_handler.setFormatter(formatter)
+log.addHandler(stream_handler)
 
 REMINDER_FILE = "sent_reminders.json"
 
@@ -66,6 +70,14 @@ STATE_REMIND_SELECT = "remind_select"
 STATE_REMIND_COUNT = "remind_count"
 STATE_REMIND_MINUTES = "remind_minutes"
 STATE_REMIND_INDEX = "remind_index"
+STATE_EXP_MENU       = "exp_menu"
+STATE_EXP_AMOUNT     = "exp_amount"
+STATE_EXP_CATEGORY   = "exp_category"
+STATE_EXP_DESC       = "exp_desc"
+STATE_EXP_LIST       = "exp_list"
+STATE_EXP_DELETE     = "exp_delete"
+STATE_EXP_STATS      = "exp_stats"
+STATE_EXP_MONTH_PICK = "exp_month_pick"
 
 # ================= TOKEN =================
 with open(TOKEN_FILE, "r", encoding="utf-8") as f:
@@ -207,6 +219,7 @@ def main_menu_kb():
     kb.add_button("Edit", VkKeyboardColor.PRIMARY)
     kb.add_line()
     kb.add_button("Quick Commands", VkKeyboardColor.SECONDARY)
+    kb.add_button("Expenses", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
 def list_menu_kb():
@@ -259,6 +272,66 @@ def remind_minutes_kb():
     kb.add_button("180", VkKeyboardColor.PRIMARY)
     kb.add_button("720", VkKeyboardColor.PRIMARY)
     return kb.get_keyboard()
+
+
+def exp_menu_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("➕ Add expense", VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button("📊 This month", VkKeyboardColor.PRIMARY)
+    kb.add_button("📅 By month", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("🗑 Delete expense", VkKeyboardColor.NEGATIVE)
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def exp_category_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("🍔 food",       VkKeyboardColor.PRIMARY)
+    kb.add_button("🚗 transport",  VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("🏠 housing",    VkKeyboardColor.PRIMARY)
+    kb.add_button("💊 health",     VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("🎮 fun",        VkKeyboardColor.PRIMARY)
+    kb.add_button("🛒 shop",       VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("💰 savings",    VkKeyboardColor.PRIMARY)
+    kb.add_button("🧾 bills",      VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("🎁 gifts",      VkKeyboardColor.PRIMARY)
+    kb.add_button("📦 other",      VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def exp_desc_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("— skip —", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def exp_month_kb():
+    kb = VkKeyboard(one_time=True)
+    today = datetime.now().date()
+    months = []
+    y, m = today.year, today.month
+    for _ in range(6):
+        months.append((y, m))
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    months.reverse()
+    for i in range(0, 6, 2):
+        for j in range(2):
+            if i + j < len(months):
+                yy, mm = months[i + j]
+                kb.add_button(f"{yy}-{mm:02d}", VkKeyboardColor.PRIMARY)
+        if i + 2 < 6:
+            kb.add_line()
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
 
 def hashtag_kb():
     kb = VkKeyboard(one_time=True)
@@ -327,6 +400,24 @@ def next_uid(uid):
         return f"uid{val}"
 
 # ================= HASHTAG & LINE PARSING =================
+CATEGORIES = [
+    ("🍔", "food"),
+    ("🚗", "transport"),
+    ("🏠", "housing"),
+    ("💊", "health"),
+    ("🎮", "fun"),
+    ("🛒", "shop"),
+    ("💰", "savings"),
+    ("🧾", "bills"),
+    ("🎁", "gifts"),
+    ("📦", "other"),
+]
+CAT_SLUGS = [c[1] for c in CATEGORIES]
+CAT_LABEL_MAP = {f"{e} {s}": s for e, s in CATEGORIES}
+for s in CAT_SLUGS:
+    CAT_LABEL_MAP[s] = s
+
+
 HASHTAG_RE = re.compile(r"(#\w+)")
 EVENT_OR_PERS_RE = re.compile(r"\b(event|pers|control)\b", re.IGNORECASE)
 
@@ -343,6 +434,171 @@ def line_has_uid(line, uid_value):
     return uid_event == uid_value
 
 # ================= PLANNER =================
+# ================= EXPENSE FILE HELPERS =================
+EXPENSE_ARCHIVE_MONTHS = 3
+
+def exp_file(uid):
+    return os.path.join(PLANNER_DIR, f"{uid}expenses.json")
+
+def exp_totals_file(uid):
+    return os.path.join(PLANNER_DIR, f"{uid}exp_totals.json")
+
+def exp_archive_file(uid, year):
+    return os.path.join(PLANNER_DIR, f"{uid}expenses_{year}.json")
+
+def _read_json_list(path):
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def _write_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def read_expenses(uid):
+    return _read_json_list(exp_file(uid))
+
+def write_expenses(uid, entries):
+    _write_json(exp_file(uid), entries)
+
+def read_totals(uid):
+    if not os.path.exists(exp_totals_file(uid)):
+        return {}
+    try:
+        with open(exp_totals_file(uid), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_totals(uid, totals):
+    _write_json(exp_totals_file(uid), totals)
+
+def _month_key(dt_str):
+    return dt_str[:7]
+
+def _cat_emoji(cat):
+    for e, s in CATEGORIES:
+        if s == cat:
+            return e
+    return "📦"
+
+def _add_to_totals(uid, entry):
+    totals = read_totals(uid)
+    mk = _month_key(entry["dt"])
+    if mk not in totals:
+        totals[mk] = {"total": 0.0}
+        for s in CAT_SLUGS:
+            totals[mk][s] = 0.0
+    cat = entry.get("category", "other")
+    totals[mk]["total"] = round(totals[mk].get("total", 0) + entry["amount"], 2)
+    totals[mk][cat]     = round(totals[mk].get(cat, 0)   + entry["amount"], 2)
+    _save_totals(uid, totals)
+
+def _subtract_from_totals(uid, entry):
+    totals = read_totals(uid)
+    mk = _month_key(entry["dt"])
+    if mk not in totals:
+        return
+    cat = entry.get("category", "other")
+    totals[mk]["total"] = round(max(0, totals[mk].get("total", 0) - entry["amount"]), 2)
+    totals[mk][cat]     = round(max(0, totals[mk].get(cat, 0)   - entry["amount"]), 2)
+    _save_totals(uid, totals)
+
+def next_exp_id(uid):
+    with state_lock:
+        u = user(uid)
+        val = u.get("next_exp_id", 1)
+        u["next_exp_id"] = val + 1
+        save_states()
+        return f"e{val}"
+
+def save_expense(uid, amount, category, desc):
+    entry = {
+        "id":       next_exp_id(uid),
+        "dt":       datetime.now().strftime("%Y-%m-%dT%H:%M"),
+        "amount":   amount,
+        "category": category,
+        "desc":     desc,
+    }
+    entries = read_expenses(uid)
+    entries.append(entry)
+    write_expenses(uid, entries)
+    _add_to_totals(uid, entry)
+    return entry
+
+def delete_expense_by_index(uid, idx):
+    entries = read_expenses(uid)
+    if not (0 <= idx < len(entries)):
+        return None
+    removed = entries.pop(idx)
+    write_expenses(uid, entries)
+    _subtract_from_totals(uid, removed)
+    return removed
+
+def format_entry(entry, idx=None):
+    dt  = entry["dt"][5:16].replace("T", " ")
+    em  = _cat_emoji(entry["category"])
+    amt = f"{entry['amount']:,.0f}"
+    desc = f"  {entry['desc']}" if entry.get("desc") else ""
+    prefix = f"{idx+1}. " if idx is not None else ""
+    return f"{prefix}{dt} {em}{amt}{desc}"
+
+def format_month_stats(uid, month_key):
+    totals = read_totals(uid)
+    if month_key not in totals:
+        return f"No expenses recorded for {month_key}."
+    data  = totals[month_key]
+    grand = data.get("total", 0)
+    lines = [f"📊 {month_key}  —  {grand:,.0f}"]
+    for em, cat in CATEGORIES:
+        amt = data.get(cat, 0)
+        if amt == 0:
+            continue
+        pct = int(amt / grand * 100) if grand else 0
+        bar = "█" * (pct // 10)
+        lines.append(f"{em} {cat:<10} {amt:>8,.0f}  {pct:>3}% {bar}")
+    return "\n".join(lines)
+
+def format_all_month_totals(uid):
+    totals = read_totals(uid)
+    if not totals:
+        return "No expense history yet."
+    lines = ["📅 Monthly totals:"]
+    for mk in sorted(totals.keys()):
+        amt = totals[mk].get("total", 0)
+        lines.append(f"  {mk}  {amt:>10,.0f}")
+    return "\n".join(lines)
+
+def format_recent_expenses(uid, month_key=None, limit=20):
+    entries = read_expenses(uid)
+    if month_key:
+        entries = [e for e in entries if e["dt"][:7] == month_key]
+    entries = list(reversed(entries[-limit:]))
+    return [format_entry(e, i) for i, e in enumerate(entries)]
+
+def recalc_all_totals(uid):
+    all_entries = read_expenses(uid)
+    for fname in os.listdir(PLANNER_DIR):
+        if fname.startswith(f"{uid}expenses_") and fname.endswith(".json") and "totals" not in fname:
+            all_entries.extend(_read_json_list(os.path.join(PLANNER_DIR, fname)))
+    totals = {}
+    for entry in all_entries:
+        mk = _month_key(entry["dt"])
+        if mk not in totals:
+            totals[mk] = {"total": 0.0}
+            for s in CAT_SLUGS:
+                totals[mk][s] = 0.0
+        cat = entry.get("category", "other")
+        totals[mk]["total"] = round(totals[mk].get("total", 0) + entry["amount"], 2)
+        totals[mk][cat]     = round(totals[mk].get(cat, 0)   + entry["amount"], 2)
+    _save_totals(uid, totals)
+    return totals
+
+
 def planner(uid):
     return os.path.join(PLANNER_DIR, f"{uid}plan.txt")
 
@@ -408,6 +664,57 @@ def cleanup_sent_reminders():
             with open(REMINDER_FILE, "w", encoding="utf-8") as f:
                 json.dump(sent_reminders, f, indent=2)
             log.info(f"Cleaned up {len(keys_to_delete)} old reminder keys.")
+
+
+# ================= EXPENSE ARCHIVE WORKER =================
+def expense_archive_worker():
+    last_run_date = None
+    while True:
+        try:
+            now = datetime.now()
+            today = now.date()
+            if now.hour == 3 and now.minute < 2:
+                if last_run_date == today:
+                    time.sleep(30)
+                    continue
+                last_run_date = today
+                cutoff_month = today.month - EXPENSE_ARCHIVE_MONTHS
+                cutoff_year  = today.year
+                while cutoff_month <= 0:
+                    cutoff_month += 12
+                    cutoff_year  -= 1
+                cutoff = datetime(cutoff_year, cutoff_month, 1).date()
+                with state_lock:
+                    uids = list(states.keys())
+                for uid in uids:
+                    entries = read_expenses(uid)
+                    keep, archive = [], {}
+                    for e in entries:
+                        try:
+                            e_date = datetime.fromisoformat(e["dt"]).date()
+                        except Exception:
+                            keep.append(e)
+                            continue
+                        if e_date < cutoff:
+                            archive.setdefault(e_date.year, []).append(e)
+                        else:
+                            keep.append(e)
+                    if not archive:
+                        continue
+                    for yr, archived_entries in archive.items():
+                        arch_path = exp_archive_file(uid, yr)
+                        existing  = _read_json_list(arch_path)
+                        existing_ids = {e["id"] for e in existing}
+                        new_ones = [e for e in archived_entries if e["id"] not in existing_ids]
+                        _write_json(arch_path, existing + new_ones)
+                        log.info(f"Archived {len(new_ones)} expense(s) for user {uid} → {yr}")
+                    write_expenses(uid, keep)
+                time.sleep(20)
+            time.sleep(60)
+        except Exception as ex:
+            log.error(f"expense_archive_worker error: {ex}")
+            time.sleep(60)
+
 
 def daily_digest_worker():
     while True:
@@ -934,6 +1241,7 @@ threading.Thread(target=daily_pers_reminder_worker, daemon=True).start()
 threading.Thread(target=multi_day_reminder_worker, daemon=True).start()
 threading.Thread(target=custom_reminder_worker, daemon=True).start()
 threading.Thread(target=daily_tomorrow_reminder_worker, daemon=True).start()
+threading.Thread(target=expense_archive_worker, daemon=True).start()
 
 for ev in longpoll.listen():
     if ev.type != VkEventType.MESSAGE_NEW or not ev.to_me:
@@ -1096,6 +1404,10 @@ for ev in longpoll.listen():
         elif text == "Quick Commands":
             set_state(uid, STATE_QUICK_COMMANDS)
             send(uid, "Choose quick command:", quick_commands_kb())
+        elif text == "Expenses":
+            clear_data(uid)
+            set_state(uid, STATE_EXP_MENU)
+            send(uid, "💰 Expense tracker:", exp_menu_kb())
         else:
             send(uid, "Menu:", main_menu_kb())
         continue
@@ -1270,6 +1582,137 @@ for ev in longpoll.listen():
         continue
 
     # ===== EDIT MENU SUBMENU =====
+    # ===== EXPENSE MENU =====
+    if state == STATE_EXP_MENU:
+        if text == "Back to menu":
+            clear_data(uid)
+            set_state(uid, STATE_START)
+            send(uid, "Menu:", main_menu_kb())
+        elif text == "➕ Add expense":
+            clear_data(uid)
+            set_state(uid, STATE_EXP_AMOUNT)
+            send(uid, "💸 Enter amount:")
+        elif text == "📊 This month":
+            mk = datetime.now().strftime("%Y-%m")
+            send(uid, format_month_stats(str(uid), mk))
+            history = format_recent_expenses(str(uid), month_key=mk)
+            send(uid, "\n".join(history) if history else "No entries this month yet.")
+            send(uid, "Expense menu:", exp_menu_kb())
+        elif text == "📅 By month":
+            send(uid, format_all_month_totals(str(uid)))
+            set_state(uid, STATE_EXP_MONTH_PICK)
+            send(uid, "Pick a month:", exp_month_kb())
+        elif text == "🗑 Delete expense":
+            entries = read_expenses(uid)
+            if not entries:
+                send(uid, "No expenses to delete.", exp_menu_kb())
+            else:
+                clear_data(uid)
+                display = list(reversed(entries[-15:]))
+                lines = [format_entry(e, i) for i, e in enumerate(display)]
+                orig_indices = list(reversed(range(max(0, len(entries)-15), len(entries))))
+                set_data(uid, "exp_del_orig", orig_indices)
+                set_state(uid, STATE_EXP_DELETE)
+                send(uid, "Recent expenses (newest first):\n" + "\n".join(lines))
+                send(uid, "Send number(s) to delete (e.g. 1 or 1 3 5):")
+        else:
+            send(uid, "💰 Expense tracker:", exp_menu_kb())
+        continue
+
+    # ===== EXPENSE: AMOUNT =====
+    if state == STATE_EXP_AMOUNT:
+        text_clean = text.replace(",", ".").replace(" ", "")
+        try:
+            amount = float(text_clean)
+            if amount <= 0:
+                raise ValueError
+            set_data(uid, "exp_amount", amount)
+            set_state(uid, STATE_EXP_CATEGORY)
+            send(uid, f"Amount: {amount:,.0f} — Pick category:", exp_category_kb())
+        except ValueError:
+            send(uid, "❌ Enter a positive number (e.g. 1500):")
+        continue
+
+    # ===== EXPENSE: CATEGORY =====
+    if state == STATE_EXP_CATEGORY:
+        cat = CAT_LABEL_MAP.get(text)
+        if cat:
+            set_data(uid, "exp_category", cat)
+            set_state(uid, STATE_EXP_DESC)
+            send(uid, "Add a note? (or tap skip):", exp_desc_kb())
+        else:
+            send(uid, "Tap a category button:", exp_category_kb())
+        continue
+
+    # ===== EXPENSE: DESC =====
+    if state == STATE_EXP_DESC:
+        desc = "" if text == "— skip —" else text.strip()
+        amount   = get_data(uid, "exp_amount")
+        category = get_data(uid, "exp_category")
+        entry = save_expense(str(uid), amount, category, desc)
+        em = _cat_emoji(category)
+        mk = datetime.now().strftime("%Y-%m")
+        month_tot = read_totals(str(uid)).get(mk, {}).get("total", 0)
+        note_line = f"  📝 {desc}" if desc else ""
+        send(uid, f"✅ {em} {amount:,.0f}{note_line}\n📊 {mk} total: {month_tot:,.0f}", exp_menu_kb())
+        clear_data(uid)
+        set_state(uid, STATE_EXP_MENU)
+        continue
+
+    # ===== EXPENSE: MONTH PICK =====
+    if state == STATE_EXP_MONTH_PICK:
+        if text == "Back to menu":
+            clear_data(uid)
+            set_state(uid, STATE_START)
+            send(uid, "Menu:", main_menu_kb())
+        elif re.match(r"^\d{4}-\d{2}$", text):
+            send(uid, format_month_stats(str(uid), text))
+            history = format_recent_expenses(str(uid), month_key=text)
+            send(uid, "\n".join(history) if history else "No entries in active log for this month.")
+            set_state(uid, STATE_EXP_MENU)
+            send(uid, "Expense menu:", exp_menu_kb())
+        else:
+            send(uid, "Pick a month:", exp_month_kb())
+        continue
+
+    # ===== EXPENSE: DELETE =====
+    # ===== EXPENSE: DELETE =====
+    if state == STATE_EXP_DELETE:
+        orig_indices = get_data(uid, "exp_del_orig", [])
+        raw_numbers = [x for x in text.split() if x.isdigit()]
+        if not raw_numbers:
+            send(uid, "Enter one or more numbers from the list (e.g. 1 or 1 3 5):")
+            continue
+        display_indices = sorted({int(x) - 1 for x in raw_numbers})
+        invalid = [i for i in display_indices if not (0 <= i < len(orig_indices))]
+        if invalid:
+            send(uid, f"Invalid number(s): {', '.join(str(i+1) for i in invalid)}. Try again:")
+            continue
+        # Map display indices to real indices, then sort descending to delete safely
+        real_indices = sorted({orig_indices[i] for i in display_indices}, reverse=True)
+        removed_list = []
+        for real_idx in real_indices:
+            removed = delete_expense_by_index(str(uid), real_idx)
+            if removed:
+                removed_list.append(removed)
+        if not removed_list:
+            send(uid, "Nothing deleted.")
+        else:
+            lines = []
+            for removed in removed_list:
+                em = _cat_emoji(removed["category"])
+                desc_part = f"  {removed['desc']}" if removed.get("desc") else ""
+                lines.append(f"{em} {removed['amount']:,.0f}{desc_part}")
+            affected_months = {r["dt"][:7] for r in removed_list}
+            totals = read_totals(str(uid))
+            totals_lines = [f"📊 {mk}: {totals.get(mk, {}).get('total', 0):,.0f}" for mk in sorted(affected_months)]
+            send(uid, f"🗑 Deleted {len(removed_list)} entr{'y' if len(removed_list)==1 else 'ies'}:\n" + "\n".join(lines))
+            send(uid, "\n".join(totals_lines))
+        clear_data(uid)
+        set_state(uid, STATE_EXP_MENU)
+        send(uid, "Expense menu:", exp_menu_kb())
+        continue
+
     if state == STATE_EDIT_MENU:
         if text == "Back to menu":
             clear_data(uid)
@@ -1376,6 +1819,7 @@ for ev in longpoll.listen():
             set_state(uid, STATE_SUGGEST_RECURRENCE)
             send(uid, "Select recurrence:", recurrence_kb())
         # Remove the unconditional send() above
+        continue
 
     if state == STATE_SUGGEST_RECURRENCE:
         recurrence_options = ["One-time", "Weekly", "Biweekly", "Monthly", "Yearly"]
