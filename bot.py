@@ -70,7 +70,13 @@ STATE_REMIND_SELECT = "remind_select"
 STATE_REMIND_COUNT = "remind_count"
 STATE_REMIND_MINUTES = "remind_minutes"
 STATE_REMIND_INDEX = "remind_index"
+STATE_BUDGET_MENU    = "budget_menu"
 STATE_EXP_MENU       = "exp_menu"
+# New states for expense date selection
+STATE_EXP_DATE_CHOICE   = "exp_date_choice"     # "Today", "Yesterday", "Specific day"
+STATE_EXP_YEAR          = "exp_year"            # this year / prev year / specific year
+STATE_EXP_MONTH         = "exp_month"           # this month / prev month / specific month
+STATE_EXP_DAY           = "exp_day"             # text input for day 1–31
 STATE_EXP_AMOUNT     = "exp_amount"
 STATE_EXP_CATEGORY   = "exp_category"
 STATE_EXP_DESC       = "exp_desc"
@@ -78,6 +84,16 @@ STATE_EXP_LIST       = "exp_list"
 STATE_EXP_DELETE     = "exp_delete"
 STATE_EXP_STATS      = "exp_stats"
 STATE_EXP_MONTH_PICK = "exp_month_pick"
+# Income states (parallel to expenses)
+STATE_INC_MENU        = "inc_menu"
+STATE_INC_DATE_CHOICE = "inc_date_choice"
+STATE_INC_YEAR        = "inc_year"
+STATE_INC_MONTH       = "inc_month"
+STATE_INC_DAY         = "inc_day"
+STATE_INC_AMOUNT      = "inc_amount"
+STATE_INC_DESC        = "inc_desc"
+STATE_INC_MONTH_PICK  = "inc_month_pick"
+STATE_INC_DELETE      = "inc_delete"
 
 # ================= TOKEN =================
 with open(TOKEN_FILE, "r", encoding="utf-8") as f:
@@ -219,7 +235,16 @@ def main_menu_kb():
     kb.add_button("Edit", VkKeyboardColor.PRIMARY)
     kb.add_line()
     kb.add_button("Quick Commands", VkKeyboardColor.SECONDARY)
-    kb.add_button("Expenses", VkKeyboardColor.SECONDARY)
+    kb.add_button("Budget", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def budget_menu_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("Expenses", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("Income", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
 def list_menu_kb():
@@ -274,6 +299,23 @@ def remind_minutes_kb():
     return kb.get_keyboard()
 
 
+def inc_menu_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("➕ Add income", VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button("📊 This month", VkKeyboardColor.PRIMARY)
+    kb.add_button("📅 By month", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("🗑 Delete income", VkKeyboardColor.NEGATIVE)
+    kb.add_line()
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+
+
+
+
+
 def exp_menu_kb():
     kb = VkKeyboard(one_time=True)
     kb.add_button("➕ Add expense", VkKeyboardColor.POSITIVE)
@@ -285,6 +327,45 @@ def exp_menu_kb():
     kb.add_line()
     kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
+
+def exp_date_choice_kb():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("For today",     VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button("For yesterday", VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button("For specific day", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("Back", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+
+def exp_year_choice_kb():
+    kb = VkKeyboard(one_time=True)
+    now = datetime.now()
+    kb.add_button(f"This year ({now.year})",   VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button(f"Previous year ({now.year-1})", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("Specific year", VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("Back", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+
+def exp_month_choice_kb():
+    kb = VkKeyboard(one_time=True)
+    now = datetime.now()
+    prev = now - timedelta(days=now.day + 5)   # rough previous month
+    kb.add_button(f"This month ({now.strftime('%Y-%m')})",   VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button(f"Previous month ({prev.strftime('%Y-%m')})", VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("Specific month", VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("Back", VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
 
 def exp_category_kb():
     kb = VkKeyboard(one_time=True)
@@ -434,6 +515,102 @@ def line_has_uid(line, uid_value):
     return uid_event == uid_value
 
 # ================= PLANNER =================
+# ================= INCOME FILE HELPERS =================
+def inc_file(uid):
+    return os.path.join(PLANNER_DIR, f"{uid}income.json")
+
+def inc_totals_file(uid):
+    return os.path.join(PLANNER_DIR, f"{uid}inc_totals.json")
+
+def read_income(uid):
+    return _read_json_list(inc_file(uid))
+
+def write_income(uid, entries):
+    _write_json(inc_file(uid), entries)
+
+def read_inc_totals(uid):
+    if not os.path.exists(inc_totals_file(uid)):
+        return {}
+    try:
+        with open(inc_totals_file(uid), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_inc_totals(uid, totals):
+    _write_json(inc_totals_file(uid), totals)
+
+def next_inc_id(uid):
+    with state_lock:
+        u = user(uid)
+        val = u.get("next_inc_id", 1)
+        u["next_inc_id"] = val + 1
+        save_states()
+        return f"i{val}"
+
+def save_income(uid, amount, desc, dt: datetime = None):
+    if dt is None:
+        dt = datetime.now()
+    entry = {
+        "id": next_inc_id(uid),
+        "dt": dt.strftime("%Y-%m-%dT%H:%M"),
+        "amount": amount,
+        "desc": desc,
+    }
+    entries = read_income(uid)
+    entries.append(entry)
+    write_income(uid, entries)
+    _add_to_inc_totals(uid, entry)
+    return entry
+
+def delete_income_by_index(uid, idx):
+    entries = read_income(uid)
+    if not (0 <= idx < len(entries)):
+        return None
+    removed = entries.pop(idx)
+    write_income(uid, entries)
+    _subtract_from_inc_totals(uid, removed)
+    return removed
+
+def _add_to_inc_totals(uid, entry):
+    totals = read_inc_totals(uid)
+    mk = _month_key(entry["dt"])
+    if mk not in totals:
+        totals[mk] = {"total": 0.0}
+    totals[mk]["total"] = round(totals[mk].get("total", 0) + entry["amount"], 2)
+    _save_inc_totals(uid, totals)
+
+def _subtract_from_inc_totals(uid, entry):
+    totals = read_inc_totals(uid)
+    mk = _month_key(entry["dt"])
+    if mk not in totals:
+        return
+    totals[mk]["total"] = round(max(0, totals[mk].get("total", 0) - entry["amount"]), 2)
+    _save_inc_totals(uid, totals)
+
+def format_inc_entry(entry, idx=None):
+    dt = entry["dt"][5:16].replace("T", " ")
+    amt = f"{entry['amount']:,.0f}"
+    desc = f" {entry['desc']}" if entry.get("desc") else ""
+    prefix = f"{idx+1}. " if idx is not None else ""
+    return f"{prefix}{dt} +{amt}{desc}"
+
+def format_inc_month_stats(uid, month_key):
+    totals = read_inc_totals(uid)
+    if month_key not in totals:
+        return f"No income recorded for {month_key}."
+    grand = totals[month_key].get("total", 0)
+    return f"📈 {month_key} income — {grand:,.0f}"
+
+def format_recent_income(uid, month_key=None, limit=20):
+    entries = read_income(uid)
+    if month_key:
+        entries = [e for e in entries if e["dt"][:7] == month_key]
+    entries = list(reversed(entries[-limit:]))
+    return [format_inc_entry(e, i) for i, e in enumerate(entries)]
+
+
+
 # ================= EXPENSE FILE HELPERS =================
 EXPENSE_ARCHIVE_MONTHS = 3
 
@@ -516,13 +693,16 @@ def next_exp_id(uid):
         save_states()
         return f"e{val}"
 
-def save_expense(uid, amount, category, desc):
+def save_expense(uid, amount, category, desc, dt: datetime = None):
+    if dt is None:
+        dt = datetime.now()
+    
     entry = {
-        "id":       next_exp_id(uid),
-        "dt":       datetime.now().strftime("%Y-%m-%dT%H:%M"),
-        "amount":   amount,
+        "id": next_exp_id(uid),
+        "dt": dt.strftime("%Y-%m-%dT%H:%M"),
+        "amount": amount,
         "category": category,
-        "desc":     desc,
+        "desc": desc,
     }
     entries = read_expenses(uid)
     entries.append(entry)
@@ -571,6 +751,16 @@ def format_all_month_totals(uid):
     for mk in sorted(totals.keys()):
         amt = totals[mk].get("total", 0)
         lines.append(f"  {mk}  {amt:>10,.0f}")
+    return "\n".join(lines)
+
+def format_all_inc_month_totals(uid):
+    totals = read_inc_totals(uid)
+    if not totals:
+        return "No income history yet."
+    lines = ["📅 Monthly income totals:"]
+    for mk in sorted(totals.keys()):
+        amt = totals[mk].get("total", 0)
+        lines.append(f" {mk} {amt:>10,.0f}")
     return "\n".join(lines)
 
 def format_recent_expenses(uid, month_key=None, limit=20):
@@ -1404,10 +1594,10 @@ for ev in longpoll.listen():
         elif text == "Quick Commands":
             set_state(uid, STATE_QUICK_COMMANDS)
             send(uid, "Choose quick command:", quick_commands_kb())
-        elif text == "Expenses":
+        elif text == "Budget":
             clear_data(uid)
-            set_state(uid, STATE_EXP_MENU)
-            send(uid, "💰 Expense tracker:", exp_menu_kb())
+            set_state(uid, STATE_BUDGET_MENU)
+            send(uid, "💼 Budget:", budget_menu_kb())
         else:
             send(uid, "Menu:", main_menu_kb())
         continue
@@ -1582,16 +1772,76 @@ for ev in longpoll.listen():
         continue
 
     # ===== EDIT MENU SUBMENU =====
-    # ===== EXPENSE MENU =====
-    if state == STATE_EXP_MENU:
+# ===== BUDGET MENU =====
+    if state == STATE_BUDGET_MENU:
         if text == "Back to menu":
             clear_data(uid)
             set_state(uid, STATE_START)
             send(uid, "Menu:", main_menu_kb())
+        elif text == "Expenses":
+            clear_data(uid)
+            set_state(uid, STATE_EXP_MENU)
+            send(uid, "💰 Expense tracker:", exp_menu_kb())
+        elif text == "Income":
+            clear_data(uid)
+            set_state(uid, STATE_INC_MENU)
+            send(uid, "💵 Income tracker:", inc_menu_kb())
+
+        else:
+            send(uid, "💼 Budget:", budget_menu_kb())
+        continue
+
+
+
+    # ===== INCOME MENU =====
+    if state == STATE_INC_MENU:
+        if text == "Back to menu":
+            clear_data(uid)
+            set_state(uid, STATE_BUDGET_MENU)
+            send(uid, "💼 Budget:", budget_menu_kb())
+        elif text == "➕ Add income":
+            clear_data(uid)
+            set_state(uid, STATE_INC_DATE_CHOICE)
+            send(uid, "For which day do you want to add the income?", exp_date_choice_kb())
+        elif text == "📊 This month":
+            mk = datetime.now().strftime("%Y-%m")
+            send(uid, format_inc_month_stats(str(uid), mk))
+            history = format_recent_income(str(uid), month_key=mk)
+            send(uid, "\n".join(history) if history else "No income this month yet.")
+            send(uid, "Income menu:", inc_menu_kb())
+        elif text == "📅 By month":
+            # Reuse expense monthly totals display logic (you can make separate later)
+            send(uid, format_all_inc_month_totals(str(uid)))
+            set_state(uid, STATE_INC_MONTH_PICK)
+            send(uid, "Pick a month:", exp_month_kb())
+        elif text == "🗑 Delete income":
+            entries = read_income(uid)
+            if not entries:
+                send(uid, "No income to delete.", inc_menu_kb())
+            else:
+                clear_data(uid)
+                display = list(reversed(entries[-15:]))
+                lines = [format_inc_entry(e, i) for i, e in enumerate(display)]
+                orig_indices = list(reversed(range(max(0, len(entries)-15), len(entries))))
+                set_data(uid, "inc_del_orig", orig_indices)
+                set_state(uid, STATE_INC_DELETE)
+                send(uid, "Recent income entries (newest first):\n" + "\n".join(lines))
+                send(uid, "Send number(s) to delete (e.g. 1 or 1 3 5):")
+        else:
+            send(uid, "💵 Income tracker:", inc_menu_kb())
+        continue
+
+
+    # ===== EXPENSE MENU =====
+    if state == STATE_EXP_MENU:
+        if text == "Back to menu":
+            clear_data(uid)
+            set_state(uid, STATE_BUDGET_MENU)
+            send(uid, "💼 Budget:", budget_menu_kb())
         elif text == "➕ Add expense":
             clear_data(uid)
-            set_state(uid, STATE_EXP_AMOUNT)
-            send(uid, "💸 Enter amount:")
+            set_state(uid, STATE_EXP_DATE_CHOICE)
+            send(uid, "For which day do you want to add the expense?", exp_date_choice_kb())
         elif text == "📊 This month":
             mk = datetime.now().strftime("%Y-%m")
             send(uid, format_month_stats(str(uid), mk))
@@ -1620,6 +1870,333 @@ for ev in longpoll.listen():
         continue
 
     # ===== EXPENSE: AMOUNT =====
+# ────────────────────────────────────────────────
+#  New date selection flow
+# ────────────────────────────────────────────────
+
+
+    # ────────────────────────────────────────────────
+    # Income date selection flow
+    # ────────────────────────────────────────────────
+    if state == STATE_INC_DATE_CHOICE:
+        if text == "For today":
+            set_data(uid, "inc_date", datetime.now().strftime("%Y-%m-%d"))
+            set_state(uid, STATE_INC_AMOUNT)
+            send(uid, "💵 Enter amount:")
+        elif text == "For yesterday":
+            yesterday_str = (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
+            set_data(uid, "inc_date", yesterday_str)
+            set_state(uid, STATE_INC_AMOUNT)
+            send(uid, f"Adding income for yesterday ({yesterday_str}):")
+            send(uid, "💵 Enter amount:")
+        elif text == "For specific day":
+            set_state(uid, STATE_INC_YEAR)
+            send(uid, "Choose year:", exp_year_choice_kb())
+        elif text == "Back":
+            clear_data(uid)
+            set_state(uid, STATE_INC_MENU)
+            send(uid, "Income menu:", inc_menu_kb())
+        else:
+            send(uid, "Choose option:", exp_date_choice_kb())
+        continue
+
+    if state == STATE_INC_YEAR:
+        now = datetime.now()
+        if text.startswith("This year"):
+            set_data(uid, "inc_year", now.year)
+            set_state(uid, STATE_INC_MONTH)
+            send(uid, "Choose month:", exp_month_choice_kb())
+        elif text.startswith("Previous year"):
+            set_data(uid, "inc_year", now.year - 1)
+            set_state(uid, STATE_INC_MONTH)
+            send(uid, "Choose month:", exp_month_choice_kb())
+        elif text == "Specific year":
+            set_data(uid, "inc_asking_year", True)
+            send(uid, "Enter year (YYYY):")
+        elif text == "Back":
+            set_state(uid, STATE_INC_DATE_CHOICE)
+            send(uid, "For which day?", exp_date_choice_kb())
+        elif get_data(uid, "inc_asking_year"):
+            try:
+                y = int(text)
+                if 2000 <= y <= now.year + 1:
+                    set_data(uid, "inc_year", y)
+                    del user(uid)["data"]["inc_asking_year"]
+                    set_state(uid, STATE_INC_MONTH)
+                    send(uid, "Choose month:", exp_month_choice_kb())
+                else:
+                    send(uid, f"Enter reasonable year (2000–{now.year+1}):")
+            except:
+                send(uid, "Enter 4-digit year:")
+        else:
+            send(uid, "Choose year option:", exp_year_choice_kb())
+        continue
+
+    if state == STATE_INC_MONTH:
+        now = datetime.now()
+        if text.startswith("This month"):
+            set_data(uid, "inc_month", now.month)
+            set_data(uid, "inc_year", now.year)
+            set_state(uid, STATE_INC_DAY)
+            send(uid, f"Enter day (1–{calendar.monthrange(now.year, now.month)[1]}):")
+        elif text.startswith("Previous month"):
+            prev = now - timedelta(days=now.day + 5)
+            set_data(uid, "inc_year", prev.year)
+            set_data(uid, "inc_month", prev.month)
+            set_state(uid, STATE_INC_DAY)
+            send(uid, f"Enter day (1–{calendar.monthrange(prev.year, prev.month)[1]}):")
+        elif text == "Specific month":
+            set_data(uid, "inc_asking_month", True)
+            send(uid, "Enter month number (1–12):")
+        elif text == "Back":
+            set_state(uid, STATE_INC_YEAR)
+            send(uid, "Choose year:", exp_year_choice_kb())
+        elif get_data(uid, "inc_asking_month"):
+            try:
+                m = int(text)
+                if 1 <= m <= 12:
+                    y = get_data(uid, "inc_year")
+                    set_data(uid, "inc_month", m)
+                    del user(uid)["data"]["inc_asking_month"]
+                    set_state(uid, STATE_INC_DAY)
+                    send(uid, f"Enter day (1–{calendar.monthrange(y, m)[1]}):")
+                else:
+                    send(uid, "Month must be 1–12:")
+            except:
+                send(uid, "Enter month number 1–12:")
+        else:
+            send(uid, "Choose month:", exp_month_choice_kb())
+        continue
+
+    if state == STATE_INC_DAY:
+        try:
+            d = int(text)
+            y = get_data(uid, "inc_year")
+            m = get_data(uid, "inc_month")
+            maxd = calendar.monthrange(y, m)[1]
+            if 1 <= d <= maxd:
+                chosen_date = datetime(y, m, d)
+                set_data(uid, "inc_date", chosen_date.strftime("%Y-%m-%d"))
+                set_state(uid, STATE_INC_AMOUNT)
+                send(uid, f"Adding income for {chosen_date.strftime('%Y-%m-%d')}:")
+                send(uid, "💵 Enter amount:")
+            else:
+                send(uid, f"Day must be between 1 and {maxd}:")
+        except:
+            send(uid, "Enter valid day number:")
+        continue
+
+
+    if state == STATE_INC_AMOUNT:
+        text_clean = text.replace(",", ".").replace(" ", "")
+        try:
+            amount = float(text_clean)
+            if amount <= 0:
+                raise ValueError
+            set_data(uid, "inc_amount", amount)
+            set_state(uid, STATE_INC_DESC)
+            send(uid, f"Amount: {amount:,.0f} — Add a note? (or tap skip):", exp_desc_kb())
+        except ValueError:
+            send(uid, "❌ Enter a positive number (e.g. 15000):")
+        continue
+
+    if state == STATE_INC_DESC:
+        desc = "" if text == "— skip —" else text.strip()
+        amount = get_data(uid, "inc_amount")
+        inc_date_str = get_data(uid, "inc_date")
+        if inc_date_str is None:
+            inc_date_str = datetime.now().strftime("%Y-%m-%d")
+        selected_date = datetime.strptime(inc_date_str, "%Y-%m-%d").date()
+        dt_for_income = datetime.combine(selected_date, datetime.min.time())
+        entry = save_income(str(uid), amount, desc, dt=dt_for_income)
+        mk = selected_date.strftime("%Y-%m")
+        month_tot = read_inc_totals(str(uid)).get(mk, {}).get("total", 0)
+        note_line = f" 📝 {desc}" if desc else ""
+        send(uid, f"✅ +{amount:,.0f}{note_line}\n📈 {mk} total: {month_tot:,.0f}", inc_menu_kb())
+        clear_data(uid)
+        set_state(uid, STATE_INC_MENU)
+        continue
+
+
+    if state == STATE_INC_MONTH_PICK:
+        if text == "Back to menu":
+            clear_data(uid)
+            set_state(uid, STATE_START)
+            send(uid, "Menu:", main_menu_kb())
+        elif re.match(r"^\d{4}-\d{2}$", text):
+            send(uid, format_inc_month_stats(str(uid), text))
+            history = format_recent_income(str(uid), month_key=text)
+            send(uid, "\n".join(history) if history else "No income entries for this month.")
+            set_state(uid, STATE_INC_MENU)
+            send(uid, "Income menu:", inc_menu_kb())
+        else:
+            send(uid, "Pick a month:", exp_month_kb())
+        continue
+
+    if state == STATE_INC_DELETE:
+        orig_indices = get_data(uid, "inc_del_orig", [])
+        raw_numbers = [x for x in text.split() if x.isdigit()]
+        if not raw_numbers:
+            send(uid, "Enter one or more numbers from the list (e.g. 1 or 1 3 5):")
+            continue
+        display_indices = sorted({int(x) - 1 for x in raw_numbers})
+        invalid = [i for i in display_indices if not (0 <= i < len(orig_indices))]
+        if invalid:
+            send(uid, f"Invalid number(s): {', '.join(str(i+1) for i in invalid)}. Try again:")
+            continue
+        real_indices = sorted({orig_indices[i] for i in display_indices}, reverse=True)
+        removed_list = []
+        for real_idx in real_indices:
+            removed = delete_income_by_index(str(uid), real_idx)
+            if removed:
+                removed_list.append(removed)
+        if not removed_list:
+            send(uid, "Nothing deleted.")
+        else:
+            lines = []
+            for removed in removed_list:
+                desc_part = f" {removed['desc']}" if removed.get("desc") else ""
+                lines.append(f"+{removed['amount']:,.0f}{desc_part}")
+            affected_months = {r["dt"][:7] for r in removed_list}
+            totals = read_inc_totals(str(uid))
+            totals_lines = [f"📈 {mk}: {totals.get(mk, {}).get('total', 0):,.0f}" for mk in sorted(affected_months)]
+            send(uid, f"🗑 Deleted {len(removed_list)} entr{'y' if len(removed_list)==1 else 'ies'}:\n" + "\n".join(lines))
+            send(uid, "\n".join(totals_lines))
+        clear_data(uid)
+        set_state(uid, STATE_INC_MENU)
+        send(uid, "Income menu:", inc_menu_kb())
+        continue
+
+
+    # ────────────────────────────────────────────────
+    #  Expense date selection flow
+    # ────────────────────────────────────────────────
+
+    if state == STATE_EXP_DATE_CHOICE:
+        if text == "For today":
+            set_data(uid, "exp_date", datetime.now().strftime("%Y-%m-%d"))
+            set_state(uid, STATE_EXP_AMOUNT)
+            send(uid, "💸 Enter amount:")
+
+        elif text == "For yesterday":
+            yesterday = datetime.now().date() - timedelta(days=1)
+            set_data(uid, "exp_date", yesterday)
+            set_state(uid, STATE_EXP_AMOUNT)
+            send(uid, f"Adding expense for yesterday ({yesterday}):")
+            send(uid, "💸 Enter amount:")
+
+        elif text == "For specific day":
+            set_state(uid, STATE_EXP_YEAR)
+            send(uid, "Choose year:", exp_year_choice_kb())
+
+        elif text == "Back":
+            clear_data(uid)
+            set_state(uid, STATE_EXP_MENU)
+            send(uid, "Expense menu:", exp_menu_kb())
+
+        else:
+            send(uid, "Choose option:", exp_date_choice_kb())
+        continue
+
+
+    if state == STATE_EXP_YEAR:
+        now = datetime.now()
+        if text.startswith("This year"):
+            set_data(uid, "exp_year", now.year)
+            set_state(uid, STATE_EXP_MONTH)
+            send(uid, "Choose month:", exp_month_choice_kb())
+
+        elif text.startswith("Previous year"):
+            set_data(uid, "exp_year", now.year - 1)
+            set_state(uid, STATE_EXP_MONTH)
+            send(uid, "Choose month:", exp_month_choice_kb())
+
+        elif text == "Specific year":
+            set_data(uid, "exp_asking_year", True)
+            send(uid, "Enter year (YYYY):")
+
+        elif text == "Back":
+            set_state(uid, STATE_EXP_DATE_CHOICE)
+            send(uid, "For which day?", exp_date_choice_kb())
+
+        elif get_data(uid, "exp_asking_year"):  # user entered year manually
+            try:
+                y = int(text)
+                if 2000 <= y <= now.year + 1:
+                    set_data(uid, "exp_year", y)
+                    del user(uid)["data"]["exp_asking_year"]
+                    set_state(uid, STATE_EXP_MONTH)
+                    send(uid, "Choose month:", exp_month_choice_kb())
+                else:
+                    send(uid, f"Enter reasonable year (2000–{now.year+1}):")
+            except:
+                send(uid, "Enter 4-digit year:")
+        else:
+            send(uid, "Choose year option:", exp_year_choice_kb())
+        continue
+
+
+    if state == STATE_EXP_MONTH:
+        now = datetime.now()
+        if text.startswith("This month"):
+            set_data(uid, "exp_month", now.month)
+            set_data(uid, "exp_year", now.year)  # just in case
+            set_state(uid, STATE_EXP_DAY)
+            send(uid, f"Enter day (1–{calendar.monthrange(now.year, now.month)[1]}):")
+
+        elif text.startswith("Previous month"):
+            prev = now - timedelta(days=now.day + 5)
+            set_data(uid, "exp_year", prev.year)
+            set_data(uid, "exp_month", prev.month)
+            set_state(uid, STATE_EXP_DAY)
+            send(uid, f"Enter day (1–{calendar.monthrange(prev.year, prev.month)[1]}):")
+
+        elif text == "Specific month":
+            set_data(uid, "exp_asking_month", True)
+            send(uid, "Enter month number (1–12):")
+
+        elif text == "Back":
+            set_state(uid, STATE_EXP_YEAR)
+            send(uid, "Choose year:", exp_year_choice_kb())
+
+        elif get_data(uid, "exp_asking_month"):
+            try:
+                m = int(text)
+                if 1 <= m <= 12:
+                    y = get_data(uid, "exp_year")
+                    set_data(uid, "exp_month", m)
+                    del user(uid)["data"]["exp_asking_month"]
+                    set_state(uid, STATE_EXP_DAY)
+                    send(uid, f"Enter day (1–{calendar.monthrange(y, m)[1]}):")
+                else:
+                    send(uid, "Month must be 1–12:")
+            except:
+                send(uid, "Enter month number 1–12:")
+        else:
+            send(uid, "Choose month:", exp_month_choice_kb())
+        continue
+
+
+    if state == STATE_EXP_DAY:
+        try:
+            d = int(text)
+            y = get_data(uid, "exp_year")
+            m = get_data(uid, "exp_month")
+            maxd = calendar.monthrange(y, m)[1]
+            if 1 <= d <= maxd:
+                chosen_date = datetime(y, m, d)
+                # You can also let user choose time, but for expenses usually just date is enough
+                set_data(uid, "exp_date", chosen_date.strftime("%Y-%m-%d"))   # ← string!
+                set_state(uid, STATE_EXP_AMOUNT)
+                send(uid, f"Adding expense for {chosen_date.strftime('%Y-%m-%d')}:")
+                send(uid, "💸 Enter amount:")
+            else:
+                send(uid, f"Day must be between 1 and {maxd}:")
+        except:
+            send(uid, "Enter valid day number:")
+        continue
+
+
     if state == STATE_EXP_AMOUNT:
         text_clean = text.replace(",", ".").replace(" ", "")
         try:
@@ -1632,6 +2209,7 @@ for ev in longpoll.listen():
         except ValueError:
             send(uid, "❌ Enter a positive number (e.g. 1500):")
         continue
+
 
     # ===== EXPENSE: CATEGORY =====
     if state == STATE_EXP_CATEGORY:
@@ -1649,12 +2227,25 @@ for ev in longpoll.listen():
         desc = "" if text == "— skip —" else text.strip()
         amount   = get_data(uid, "exp_amount")
         category = get_data(uid, "exp_category")
-        entry = save_expense(str(uid), amount, category, desc)
+
+        exp_date_str = get_data(uid, "exp_date")
+        if exp_date_str is None:
+            # fallback — should never happen, but good to have
+            exp_date_str = datetime.now().strftime("%Y-%m-%d")
+
+        selected_date = datetime.strptime(exp_date_str, "%Y-%m-%d").date()
+        dt_for_expense = datetime.combine(selected_date, datetime.min.time())
+
+        entry = save_expense(str(uid), amount, category, desc, dt=dt_for_expense)
+
         em = _cat_emoji(category)
-        mk = datetime.now().strftime("%Y-%m")
+        mk = selected_date.strftime("%Y-%m")
         month_tot = read_totals(str(uid)).get(mk, {}).get("total", 0)
+
         note_line = f"  📝 {desc}" if desc else ""
+
         send(uid, f"✅ {em} {amount:,.0f}{note_line}\n📊 {mk} total: {month_tot:,.0f}", exp_menu_kb())
+
         clear_data(uid)
         set_state(uid, STATE_EXP_MENU)
         continue
