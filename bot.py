@@ -814,6 +814,15 @@ def delete_expense_by_index(uid, idx):
     remove_large_expense(uid, removed["id"])  # ← NEW
     return removed
 
+
+def rebuild_large_expenses(uid):
+    """Scan all current expenses and rebuild the large_expenses log from scratch."""
+    all_entries = read_expenses(uid)
+    large = [e for e in all_entries if e.get("amount", 0) > LARGE_EXPENSE_LIMIT]
+    write_large_expenses(uid, large)
+    return len(large)
+
+
 def format_entry(entry, idx=None):
     dt = entry["dt"][5:16].replace("T", " ")          # e.g. "03-09 14:30"
     em = _cat_emoji(entry["category"])
@@ -1610,6 +1619,7 @@ for ev in longpoll.listen():
             ("/today", "Show today's events"),
             ("/tomorrow", "Show next day's events"),
             ("/extend", "Extend existing event"),
+            ("/largesumsrevisit", "Large expense log rebuilt"),
             ("/remind", "Set custom reminders")
         ]
         send(uid, "📖 Available commands:")
@@ -1661,6 +1671,13 @@ for ev in longpoll.listen():
             send(uid, "Select event number to set reminder for:")
             send_batch(uid, "remind_msgs", "remind_offset")
         continue
+
+
+    if text.lower() == "/largesumsrevisit":
+        count = rebuild_large_expenses(str(uid))
+        send(uid, f"✅ Large expense log rebuilt.\n⚠️ Found {count} expense(s) above {LARGE_EXPENSE_LIMIT:,}.", main_menu_kb())
+        continue
+
 
     if text.lower() == "/today":
         today = datetime.now().date()
