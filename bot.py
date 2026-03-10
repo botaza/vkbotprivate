@@ -30,6 +30,7 @@ STATE_FILE = "states.json"
 PLANNER_DIR = "planners"
 DAYS_PER_BATCH = 4
 RECENT_ENTRIES_PER_PAGE = 7      # ← NEW  ← you can change to 8/12/15 etc
+LARGE_EXPENSE_LIMIT = 3000
 os.makedirs(PLANNER_DIR, exist_ok=True)
 
 # ================= STATES =================
@@ -799,6 +800,7 @@ def save_expense(uid, amount, category, desc, dt: datetime = None, tool: str = N
     entries.append(entry)
     write_expenses(uid, entries)
     _add_to_totals(uid, entry)
+    log_large_expense(uid, entry)  # ← NEW
     return entry
 
 
@@ -809,6 +811,7 @@ def delete_expense_by_index(uid, idx):
     removed = entries.pop(idx)
     write_expenses(uid, entries)
     _subtract_from_totals(uid, removed)
+    remove_large_expense(uid, removed["id"])  # ← NEW
     return removed
 
 def format_entry(entry, idx=None):
@@ -883,6 +886,18 @@ def format_recent_expenses(uid, month_key=None, page_size=RECENT_ENTRIES_PER_PAG
     return pages
 
 
+def format_large_expenses_for_month(uid, month_key):
+    """Return a formatted string of large expenses for the given month, or empty string."""
+    entries = read_large_expenses(uid)
+    month_entries = [e for e in entries if e["dt"][:7] == month_key]
+    if not month_entries:
+        return ""
+    lines = [f"⚠️ Large expenses (>{LARGE_EXPENSE_LIMIT:,}):"]
+    for e in month_entries:
+        lines.append(format_entry(e))
+    return "\n".join(lines)
+
+
 def recalc_all_totals(uid):
     all_entries = read_expenses(uid)
     for fname in os.listdir(PLANNER_DIR):
@@ -900,6 +915,31 @@ def recalc_all_totals(uid):
         totals[mk][cat]     = round(totals[mk].get(cat, 0)   + entry["amount"], 2)
     _save_totals(uid, totals)
     return totals
+
+
+
+def large_exp_file(uid):
+    return os.path.join(PLANNER_DIR, f"{uid}large_expenses.json")
+
+def read_large_expenses(uid):
+    return _read_json_list(large_exp_file(uid))
+
+def write_large_expenses(uid, entries):
+    _write_json(large_exp_file(uid), entries)
+
+def log_large_expense(uid, entry):
+    """Append entry to large expense log if it exceeds the limit."""
+    if entry.get("amount", 0) > LARGE_EXPENSE_LIMIT:
+        entries = read_large_expenses(uid)
+        entries.append(entry)
+        write_large_expenses(uid, entries)
+
+def remove_large_expense(uid, entry_id):
+    """Remove a deleted expense from the large expense log by its id."""
+    entries = read_large_expenses(uid)
+    entries = [e for e in entries if e.get("id") != entry_id]
+    write_large_expenses(uid, entries)
+
 
 
 def planner(uid):
@@ -2207,8 +2247,6 @@ for ev in longpoll.listen():
             send(uid, "Menu:", main_menu_kb())
         elif re.match(r"^\d{4}-\d{2}$", text):
             send(uid, format_inc_month_stats(str(uid), text))
-            history = format_recent_income(str(uid), month_key=text)
-            send(uid, "\n".join(history) if history else "No income entries for this month.")
             set_state(uid, STATE_INC_MENU)
             send(uid, "Income menu:", inc_menu_kb())
         else:
@@ -2408,9 +2446,8 @@ for ev in longpoll.listen():
     if state == STATE_EXP_DESC:
         desc = "" if text == "— skip —" else text.strip()
         set_data(uid, "exp_desc", desc)
-        amount   = get_data(uid, "exp_amount")
+        amount = get_data(uid, "exp_amount")
         category = get_data(uid, "exp_category")
-
         send(uid,
             f"Amount: {amount:,.0f} • {category}\n"
             f"Note: {desc or '—'}",
@@ -2426,16 +2463,22 @@ for ev in longpoll.listen():
             set_state(uid, STATE_START)
             send(uid, "Menu:", main_menu_kb())
         elif re.match(r"^\d{4}-\d{2}$", text):
-            send(uid, format_month_stats(str(uid), text))
-            history = format_recent_expenses(str(uid), month_key=text)
-            send(uid, "\n".join(history) if history else "No entries in active log for this month.")
+            stats_msg = format_month_stats(str(uid), text)
+            large_msg = format_large_expenses_for_month(str(uid), text)  # ← NEW
+
+            send(uid, stats_msg)
+
+       
+            if large_msg:
+                send(uid, large_msg)
+
             set_state(uid, STATE_EXP_MENU)
             send(uid, "Expense menu:", exp_menu_kb())
         else:
             send(uid, "Pick a month:", exp_month_kb())
         continue
 
-    # ===== EXPENSE: DELETE =====
+
     # ===== EXPENSE: DELETE =====
     if state == STATE_EXP_DELETE:
         orig_indices = get_data(uid, "exp_del_orig", [])
