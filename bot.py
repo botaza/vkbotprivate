@@ -220,6 +220,7 @@ def quick_commands_kb():
     kb.add_line()
     kb.add_button("/remind", VkKeyboardColor.PRIMARY)  
     kb.add_button("/extend", VkKeyboardColor.PRIMARY)
+    kb.add_button("/largesumsrevisit", VkKeyboardColor.PRIMARY)
     kb.add_line()   
     kb.add_button("/today", VkKeyboardColor.PRIMARY)    
     kb.add_button("/tomorrow", VkKeyboardColor.PRIMARY)      
@@ -698,6 +699,25 @@ def send_paginated_recent(uid, pages_key: str, menu_kb_func, empty_msg: str = "N
     data["recent_offset"] = offset + 1
     save_states()
 
+
+def _send_delete_page(uid, pages_key, offset_key, kind="expense"):
+    data = user(uid)["data"]
+    pages = data.get(pages_key, [])
+    offset = data.get(offset_key, 0)
+    if offset >= len(pages):
+        return
+    text = pages[offset]
+    if offset == 0:
+        text = f"🗑 Recent {kind}s (newest first):\n\n" + text
+    text += "\n\nSend number(s) to delete (e.g. 1 or 1 3 5):"
+    has_next = offset + 1 < len(pages)
+    kb = VkKeyboard(one_time=True)
+    if has_next:
+        kb.add_button("Next →", VkKeyboardColor.PRIMARY)
+    kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+    send(uid, text, kb.get_keyboard())
+    data[offset_key] = offset + 1
+    save_states()
 
 # ================= EXPENSE FILE HELPERS =================
 EXPENSE_ARCHIVE_MONTHS = 3
@@ -1794,6 +1814,11 @@ for ev in longpoll.listen():
             clear_data(uid)
             set_state(uid, STATE_START)
             send(uid, "Menu:", main_menu_kb())
+
+        elif text == "/largesumsrevisit":
+            count = rebuild_large_expenses(str(uid))
+            send(uid, f"✅ Large expense log rebuilt.\n⚠️ Found {count} expense(s) above {LARGE_EXPENSE_LIMIT:,}.", quick_commands_kb())
+
         elif text == "/tomorrow":
             tomorrow = (datetime.now() + timedelta(days=1)).date()
             weekday = (datetime.now() + timedelta(days=1)).strftime("%A")
@@ -1996,13 +2021,20 @@ for ev in longpoll.listen():
                 send(uid, "No income to delete.", inc_menu_kb())
             else:
                 clear_data(uid)
-                display = list(reversed(entries[-15:]))
-                lines = [format_inc_entry(e, i) for i, e in enumerate(display)]
-                orig_indices = list(reversed(range(max(0, len(entries)-15), len(entries))))
+                reversed_entries = list(reversed(entries))
+                pages = []
+                for start in range(0, len(reversed_entries), RECENT_ENTRIES_PER_PAGE):
+                    chunk = reversed_entries[start:start + RECENT_ENTRIES_PER_PAGE]
+                    lines = [format_inc_entry(e, start + i) for i, e in enumerate(chunk)]
+                    pages.append("\n".join(lines))
+                orig_indices = list(reversed(range(len(entries))))
+                set_data(uid, "del_pages", pages)
+                set_data(uid, "del_offset", 0)
                 set_data(uid, "inc_del_orig", orig_indices)
                 set_state(uid, STATE_INC_DELETE)
-                send(uid, "Recent income entries (newest first):\n" + "\n".join(lines))
-                send(uid, "Send number(s) to delete (e.g. 1 or 1 3 5):")
+                _send_delete_page(uid, "del_pages", "del_offset", "income")
+
+
         else:
             send(uid, "💵 Income tracker:", inc_menu_kb())
         continue
@@ -2041,13 +2073,19 @@ for ev in longpoll.listen():
                 send(uid, "No expenses to delete.", exp_menu_kb())
             else:
                 clear_data(uid)
-                display = list(reversed(entries[-15:]))
-                lines = [format_entry(e, i) for i, e in enumerate(display)]
-                orig_indices = list(reversed(range(max(0, len(entries)-15), len(entries))))
+                reversed_entries = list(reversed(entries))
+                pages = []
+                for start in range(0, len(reversed_entries), RECENT_ENTRIES_PER_PAGE):
+                    chunk = reversed_entries[start:start + RECENT_ENTRIES_PER_PAGE]
+                    lines = [format_entry(e, start + i) for i, e in enumerate(chunk)]
+                    pages.append("\n".join(lines))
+                orig_indices = list(reversed(range(len(entries))))
+                set_data(uid, "del_pages", pages)
+                set_data(uid, "del_offset", 0)
                 set_data(uid, "exp_del_orig", orig_indices)
                 set_state(uid, STATE_EXP_DELETE)
-                send(uid, "Recent expenses (newest first):\n" + "\n".join(lines))
-                send(uid, "Send number(s) to delete (e.g. 1 or 1 3 5):")
+                _send_delete_page(uid, "del_pages", "del_offset", "expense")
+
         else:
             send(uid, "💰 Expense tracker:", exp_menu_kb())
         continue
@@ -2271,6 +2309,15 @@ for ev in longpoll.listen():
         continue
 
     if state == STATE_INC_DELETE:
+        if text == "Next →":
+            _send_delete_page(uid, "del_pages", "del_offset", "income")
+            continue
+        if text == "Back to menu":          # ← ADD THIS
+            clear_data(uid)
+            set_state(uid, STATE_INC_MENU)
+            send(uid, "💵 Income tracker:", inc_menu_kb())
+            continue
+        # ... rest unchanged
         orig_indices = get_data(uid, "inc_del_orig", [])
         raw_numbers = [x for x in text.split() if x.isdigit()]
         if not raw_numbers:
@@ -2303,6 +2350,7 @@ for ev in longpoll.listen():
         set_state(uid, STATE_INC_MENU)
         send(uid, "Income menu:", inc_menu_kb())
         continue
+
 
 
     # ────────────────────────────────────────────────
@@ -2498,6 +2546,14 @@ for ev in longpoll.listen():
 
     # ===== EXPENSE: DELETE =====
     if state == STATE_EXP_DELETE:
+        if text == "Next →":
+            _send_delete_page(uid, "del_pages", "del_offset", "expense")
+            continue
+        if text == "Back to menu":          # ← ADD THIS
+            clear_data(uid)
+            set_state(uid, STATE_EXP_MENU)
+            send(uid, "💰 Expense tracker:", exp_menu_kb())
+            continue
         orig_indices = get_data(uid, "exp_del_orig", [])
         raw_numbers = [x for x in text.split() if x.isdigit()]
         if not raw_numbers:
@@ -2508,7 +2564,6 @@ for ev in longpoll.listen():
         if invalid:
             send(uid, f"Invalid number(s): {', '.join(str(i+1) for i in invalid)}. Try again:")
             continue
-        # Map display indices to real indices, then sort descending to delete safely
         real_indices = sorted({orig_indices[i] for i in display_indices}, reverse=True)
         removed_list = []
         for real_idx in real_indices:
@@ -2532,6 +2587,7 @@ for ev in longpoll.listen():
         set_state(uid, STATE_EXP_MENU)
         send(uid, "Expense menu:", exp_menu_kb())
         continue
+
 
     if state == STATE_EDIT_MENU:
         if text == "Back to menu":
