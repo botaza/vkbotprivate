@@ -823,9 +823,9 @@ def save_expense(uid, amount, category, desc, dt: datetime = None, tool: str = N
     entries.append(entry)
     write_expenses(uid, entries)
     _add_to_totals(uid, entry)
-    log_large_expense(uid, entry)  # ← NEW
+    log_large_expense(uid, entry)
+    log_notmy_expense(uid, entry)  # ← NEW
     return entry
-
 
 def delete_expense_by_index(uid, idx):
     entries = read_expenses(uid)
@@ -834,9 +834,9 @@ def delete_expense_by_index(uid, idx):
     removed = entries.pop(idx)
     write_expenses(uid, entries)
     _subtract_from_totals(uid, removed)
-    remove_large_expense(uid, removed["id"])  # ← NEW
+    remove_large_expense(uid, removed["id"])
+    remove_notmy_expense(uid, removed["id"])  # ← NEW
     return removed
-
 
 def rebuild_large_expenses(uid):
     """Scan all current expenses and rebuild the large_expenses log from scratch."""
@@ -1013,6 +1013,41 @@ def remove_large_expense(uid, entry_id):
     entries = [e for e in entries if e.get("id") != entry_id]
     write_large_expenses(uid, entries)
 
+
+# ================= NOTMY FILE HELPERS =================
+def notmy_file(uid):
+    return os.path.join(PLANNER_DIR, f"{uid}notmy.json")
+
+def read_notmy(uid):
+    return _read_json_list(notmy_file(uid))
+
+def write_notmy(uid, entries):
+    _write_json(notmy_file(uid), entries)
+
+def log_notmy_expense(uid, entry):
+    """Append entry to notmy journal if category is 'notmy'."""
+    if entry.get("category") == "notmy":
+        entries = read_notmy(uid)
+        entries.append(entry)
+        write_notmy(uid, entries)
+
+def remove_notmy_expense(uid, entry_id):
+    """Remove a deleted expense from the notmy journal by its id."""
+    entries = read_notmy(uid)
+    entries = [e for e in entries if e.get("id") != entry_id]
+    write_notmy(uid, entries)
+
+def format_notmy_for_month(uid, month_key):
+    """Return formatted notmy entries for the given month, or empty string."""
+    entries = read_notmy(uid)
+    month_entries = [e for e in entries if e["dt"][:7] == month_key]
+    if not month_entries:
+        return ""
+    total = sum(e["amount"] for e in month_entries)
+    lines = [f"🚫 Not-my expenses for {month_key} — {total:,.0f}:"]
+    for e in month_entries:
+        lines.append(format_entry(e))
+    return "\n".join(lines)
 
 
 def planner(uid):
@@ -2044,9 +2079,16 @@ for ev in longpoll.listen():
             clear_data(uid)
             set_state(uid, STATE_INC_DATE_CHOICE)
             send(uid, "For which day do you want to add the income?", exp_date_choice_kb())
+
+
         elif text == "📊 This month":
             mk = datetime.now().strftime("%Y-%m")
             send(uid, format_inc_month_stats(str(uid), mk))
+            # ── NEW: show notmy expenses for this month ──────────────────────
+            notmy_msg = format_notmy_for_month(str(uid), mk)
+            if notmy_msg:
+                send(uid, notmy_msg)
+            # ─────────────────────────────────────────────────────────────────
             pages = format_recent_income(str(uid), month_key=mk)
             if len(pages) == 1 and "No income" in pages[0]:
                 send(uid, pages[0], inc_menu_kb())
@@ -2054,11 +2096,18 @@ for ev in longpoll.listen():
                 clear_data(uid)
                 set_data(uid, "recent_pages", pages)
                 set_data(uid, "recent_offset", 0)
-                send_paginated_recent(uid, "recent_pages", inc_menu_kb)   # ← no u needed
+                send_paginated_recent(uid, "recent_pages", inc_menu_kb)
+
+
+
+
         elif text == "📅 By month":
             send(uid, format_all_inc_month_totals(str(uid)))
             set_state(uid, STATE_INC_MONTH_PICK)
             send(uid, "Pick a month:", exp_month_kb())
+
+
+
         elif text == "🗑 Delete income":
             entries = read_income(uid)
             if not entries:
@@ -2077,6 +2126,9 @@ for ev in longpoll.listen():
                 set_data(uid, "inc_del_orig", orig_indices)
                 set_state(uid, STATE_INC_DELETE)
                 _send_delete_page(uid, "del_pages", "del_offset", "income")
+
+
+
 
 
         else:
@@ -2361,6 +2413,9 @@ for ev in longpoll.listen():
             send(uid, "Menu:", main_menu_kb())
         elif re.match(r"^\d{4}-\d{2}$", text):
             send(uid, format_inc_month_stats(str(uid), text))
+            notmy_msg = format_notmy_for_month(str(uid), text)  # ← NEW
+            if notmy_msg:                                        # ← NEW
+                send(uid, notmy_msg)                            # ← NEW
             set_state(uid, STATE_INC_MENU)
             send(uid, "Income menu:", inc_menu_kb())
         else:
