@@ -31,6 +31,7 @@ PLANNER_DIR = "planners"
 DAYS_PER_BATCH = 4
 RECENT_ENTRIES_PER_PAGE = 7      # ← NEW  ← you can change to 8/12/15 etc
 LARGE_EXPENSE_LIMIT = 3000
+KNOWN_TOOLS = ["gp", "hal", "sb", "ren", "oz", "ya", "cert", "cash", "other"]
 os.makedirs(PLANNER_DIR, exist_ok=True)
 
 # ================= STATES =================
@@ -379,6 +380,7 @@ def exp_category_kb():
     kb.add_line()
     kb.add_button("🏠 housing",    VkKeyboardColor.PRIMARY)
     kb.add_button("💊 health",     VkKeyboardColor.PRIMARY)
+    kb.add_button("🚫 notmy",      VkKeyboardColor.SECONDARY)
     kb.add_line()
     kb.add_button("🎮 fun",        VkKeyboardColor.PRIMARY)
     kb.add_button("🛒 shop",       VkKeyboardColor.PRIMARY)
@@ -513,6 +515,7 @@ CATEGORIES = [
     ("✈️", "travel"),      # ← new
     ("🏠", "housing"),
     ("💊", "health"),
+    ("🚫", "notmy"),
     ("🎮", "fun"),
     ("🛒", "shop"),
     ("➡️", "transfer"),      # ← new
@@ -854,6 +857,47 @@ def format_entry(entry, idx=None):
     prefix = f"{idx+1}. " if idx is not None else ""
     
     return f"{prefix}{dt} {em}{amt}{desc_part}{tool_part}"
+
+
+def format_tool_breakdown_for_month(uid, month_key):
+    """Return a formatted breakdown of expenses by payment tool for a given month."""
+    entries = read_expenses(uid)
+    month_entries = [e for e in entries if e["dt"][:7] == month_key]
+    if not month_entries:
+        return ""
+
+    tool_totals: Dict[str, float] = {}
+    no_tool_total = 0.0
+
+    for e in month_entries:
+        tool = e.get("tool", "").lower().strip()
+        if not tool or tool == "— skip —":
+            no_tool_total += e["amount"]
+        else:
+            tool_totals[tool] = tool_totals.get(tool, 0.0) + e["amount"]
+
+    if not tool_totals and no_tool_total == 0:
+        return ""
+
+    grand = sum(tool_totals.values()) + no_tool_total
+    lines = ["💳 By payment method:"]
+
+    # Show known tools first (in button order), then any unexpected ones
+    seen = set()
+    ordered = KNOWN_TOOLS + [t for t in tool_totals if t not in KNOWN_TOOLS]
+    for tool in ordered:
+        amt = tool_totals.get(tool, 0.0)
+        if amt == 0:
+            continue
+        pct = int(amt / grand * 100) if grand else 0
+        lines.append(f"  {tool.upper():<6}  {amt:>10,.0f}  {pct:>3}%")
+        seen.add(tool)
+
+    if no_tool_total > 0:
+        pct = int(no_tool_total / grand * 100) if grand else 0
+        lines.append(f"  {'—':<6}  {no_tool_total:>10,.0f}  {pct:>3}%  (no method)")
+
+    return "\n".join(lines)
 
 def format_month_stats(uid, month_key):
     totals = read_totals(uid)
@@ -2052,9 +2096,22 @@ for ev in longpoll.listen():
             clear_data(uid)
             set_state(uid, STATE_EXP_DATE_CHOICE)
             send(uid, "For which day do you want to add the expense?", exp_date_choice_kb())
+
+
         elif text == "📊 This month":
             mk = datetime.now().strftime("%Y-%m")
             send(uid, format_month_stats(str(uid), mk))
+
+            # ── NEW: tool breakdown ──────────────────────────────────────────
+            tool_msg = format_tool_breakdown_for_month(str(uid), mk)
+            if tool_msg:
+                send(uid, tool_msg)
+            # ────────────────────────────────────────────────────────────────
+
+            large_msg = format_large_expenses_for_month(str(uid), mk)
+            if large_msg:
+                send(uid, large_msg)
+
             pages = format_recent_expenses(str(uid), month_key=mk)
             if len(pages) == 1 and "No expenses" in pages[0]:
                 send(uid, pages[0], exp_menu_kb())
@@ -2062,7 +2119,9 @@ for ev in longpoll.listen():
                 clear_data(uid)
                 set_data(uid, "recent_pages", pages)
                 set_data(uid, "recent_offset", 0)
-                send_paginated_recent(uid, "recent_pages", exp_menu_kb)   # ← no u needed
+                send_paginated_recent(uid, "recent_pages", exp_menu_kb)
+
+
         elif text == "📅 By month":
             send(uid, format_all_month_totals(str(uid)))
             set_state(uid, STATE_EXP_MONTH_PICK)
