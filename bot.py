@@ -2164,6 +2164,12 @@ for ev in longpoll.listen():
             if large_msg:
                 send(uid, large_msg)
 
+# ── notmy breakdown ──────────────────────────────────────────────
+            notmy_msg = format_notmy_for_month(str(uid), mk)
+            if notmy_msg:
+                send(uid, notmy_msg)
+            # ────────────────────────────────────────────────────────────────
+
             pages = format_recent_expenses(str(uid), month_key=mk)
             if len(pages) == 1 and "No expenses" in pages[0]:
                 send(uid, pages[0], exp_menu_kb())
@@ -2650,6 +2656,13 @@ for ev in longpoll.listen():
        
             if large_msg:
                 send(uid, large_msg)
+
+            # ── NEW ──
+            notmy_msg = format_notmy_for_month(str(uid), text)
+            if notmy_msg:
+                send(uid, notmy_msg)
+            # ─────────
+
 
             set_state(uid, STATE_EXP_MENU)
             send(uid, "Expense menu:", exp_menu_kb())
