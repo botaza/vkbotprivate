@@ -10,6 +10,9 @@ import calendar
 import time
 import re
 import sys
+import shutil
+import random
+import io
 
 # ================= LOGGING (Enhancement 4: Rotation) =================
 log = logging.getLogger(__name__)
@@ -18,7 +21,13 @@ handler = RotatingFileHandler("bot.log", maxBytes=5*1024*1024, backupCount=3, en
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 handler.setFormatter(formatter)
 log.addHandler(handler)
-stream_handler = logging.StreamHandler(stream=open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1) if hasattr(sys.stdout, 'fileno') else sys.stdout)
+stream_handler = logging.StreamHandler(
+    stream=io.TextIOWrapper(
+        sys.stdout.buffer,
+        encoding='utf-8',
+        line_buffering=True
+    ) if hasattr(sys.stdout, 'buffer') else sys.stdout
+)
 stream_handler.setFormatter(formatter)
 log.addHandler(stream_handler)
 
@@ -32,6 +41,9 @@ DAYS_PER_BATCH = 4
 RECENT_ENTRIES_PER_PAGE = 7      # ← NEW  ← you can change to 8/12/15 etc
 LARGE_EXPENSE_LIMIT = 3000
 KNOWN_TOOLS = ["gp", "hal", "sb", "ren", "oz", "ya", "cert", "cash", "other"]
+SNAPSHOT_DIR = "snapshots"
+MAX_SNAPSHOTS_PER_USER = 3
+os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 os.makedirs(PLANNER_DIR, exist_ok=True)
 
 # ================= STATES =================
@@ -115,7 +127,12 @@ longpoll = VkLongPoll(vk_session, mode=2)
 def send(uid, text, kb=None):
     if not text:
         text = "."
-    vk.messages.send(user_id=uid, random_id=0, message=text, keyboard=kb)
+    vk.messages.send(
+        user_id=uid,
+        random_id=random.randint(1, 2**31 - 1),   # ── FIX
+        message=text,
+        keyboard=kb
+    )
 
 
 
@@ -659,56 +676,61 @@ def format_recent_income(uid, month_key=None, page_size=RECENT_ENTRIES_PER_PAGE)
 
 
 def send_paginated_recent(uid, pages_key: str, menu_kb_func, empty_msg: str = "No records."):
-    """
-    menu_kb_func — the function that returns the keyboard (exp_menu_kb or inc_menu_kb)
-    """
     data = user(uid)["data"]
     pages = data.get(pages_key, [])
-    
+
     if not pages:
         send(uid, empty_msg, menu_kb_func())
         clear_data(uid)
+        # ── FIX: restore state so the menu works ──
+        if menu_kb_func == exp_menu_kb:
+            set_state(uid, STATE_EXP_MENU)
+        else:
+            set_state(uid, STATE_INC_MENU)
         return
-    
+
     offset = data.get("recent_offset", 0)
-    
+
     if offset >= len(pages):
-        # Finished — send end message with correct menu
         if menu_kb_func == exp_menu_kb:
             prefix = "Expense history"
             final_kb = exp_menu_kb()
+            set_state(uid, STATE_EXP_MENU)   # ── FIX
         else:
             prefix = "Income history"
             final_kb = inc_menu_kb()
-        
+            set_state(uid, STATE_INC_MENU)   # ── FIX
+
         send(uid, f"—— End of {prefix} ——", final_kb)
         clear_data(uid)
         return
-    
-    # Send current page
+
     text = pages[offset]
     if offset == 0:
         text = "📋 Recent (newest first):\n\n" + text
-    
+
     has_next = offset + 1 < len(pages)
     kb = VkKeyboard(one_time=True)
     if has_next:
         kb.add_button("Next →", VkKeyboardColor.PRIMARY)
     kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
-    
+
     send(uid, text, kb.get_keyboard())
-    
-    # Save next offset
     data["recent_offset"] = offset + 1
     save_states()
-
 
 def _send_delete_page(uid, pages_key, offset_key, kind="expense"):
     data = user(uid)["data"]
     pages = data.get(pages_key, [])
     offset = data.get(offset_key, 0)
+
+    # ── FIX: guard against out-of-bounds
     if offset >= len(pages):
+        kb = VkKeyboard(one_time=True)
+        kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
+        send(uid, f"—— End of {kind} list ——", kb.get_keyboard())
         return
+
     text = pages[offset]
     if offset == 0:
         text = f"🗑 Recent {kind}s (newest first):\n\n" + text
@@ -1164,6 +1186,36 @@ def expense_archive_worker():
             time.sleep(60)
         except Exception as ex:
             log.error(f"expense_archive_worker error: {ex}")
+            time.sleep(60)
+
+
+
+# ================= SNAPSHOT WORKER =================
+def snapshot_worker():
+    """Create a nightly snapshot for every user at 02:00."""
+    last_run_date = None
+    while True:
+        try:
+            now = datetime.now()
+            today = now.date()
+            if now.hour == 2 and now.minute < 2:
+                if last_run_date == today:
+                    time.sleep(30)
+                    continue
+                last_run_date = today
+                with state_lock:
+                    uids = list(states.keys())
+                for uid in uids:
+                    try:
+                        ts, _, count = create_snapshot(uid)
+                        prune_snapshots(uid)
+                        log.info(f"Nightly snapshot for {uid}: {ts}, {count} files")
+                    except Exception as e:
+                        log.error(f"Nightly snapshot failed for {uid}: {e}")
+                time.sleep(20)
+            time.sleep(60)
+        except Exception as e:
+            log.error(f"Snapshot worker error: {e}")
             time.sleep(60)
 
 
@@ -1669,7 +1721,7 @@ def send_photos(uid):
         peer_id, msg_id = ref.split("|")
         if desc:
             send(uid, f"Photo {i}:\n{desc}")
-        vk.messages.send(user_id=uid, random_id=0, forward_messages=int(msg_id))
+        vk.messages.send(user_id=uid, random_id=random.randint(1, 2**31 - 1), forward_messages=int(msg_id))
     send(uid, "Menu:", main_menu_kb())
 
 def read_photo_entries(uid):
@@ -1680,7 +1732,56 @@ def read_photo_entries(uid):
         return [l.rstrip() for l in f if l.strip()]
 
 
+# ================= SNAPSHOT SYSTEM =================
+def snapshot_files_for_user(uid):
+    """Return list of source file paths that belong to this user."""
+    uid = str(uid)
+    files = []
+    for fname in os.listdir(PLANNER_DIR):
+        if fname.startswith(uid):
+            files.append(os.path.join(PLANNER_DIR, fname))
+    return files
 
+def create_snapshot(uid):
+    """Copy all user files into a timestamped snapshot subfolder."""
+    uid = str(uid)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    snap_dir = os.path.join(SNAPSHOT_DIR, f"{uid}_{ts}")
+    os.makedirs(snap_dir, exist_ok=True)
+
+    copied = 0
+    for src in snapshot_files_for_user(uid):
+        fname = os.path.basename(src)
+        dst = os.path.join(snap_dir, fname)
+        shutil.copy2(src, dst)
+        copied += 1
+
+    # Also snapshot the user's states entry (counters, next_uid, etc.)
+    with state_lock:
+        user_state = states.get(uid, {})
+    state_snap = os.path.join(snap_dir, "state.json")
+    _write_json(state_snap, user_state)
+
+    log.info(f"Snapshot created for {uid}: {snap_dir} ({copied} files)")
+    return ts, snap_dir, copied
+
+def list_snapshots(uid):
+    """Return sorted list of snapshot folder names for this user."""
+    uid = str(uid)
+    snaps = sorted([
+        name for name in os.listdir(SNAPSHOT_DIR)
+        if name.startswith(f"{uid}_")
+    ])
+    return snaps
+
+def prune_snapshots(uid):
+    """Delete oldest snapshots if count exceeds MAX_SNAPSHOTS_PER_USER."""
+    uid = str(uid)
+    snaps = list_snapshots(uid)
+    while len(snaps) > MAX_SNAPSHOTS_PER_USER:
+        oldest = os.path.join(SNAPSHOT_DIR, snaps.pop(0))
+        shutil.rmtree(oldest)
+        log.info(f"Pruned old snapshot: {oldest}")
 
 
 # ================= MAIN LOOP =================
@@ -1693,6 +1794,7 @@ threading.Thread(target=multi_day_reminder_worker, daemon=True).start()
 threading.Thread(target=custom_reminder_worker, daemon=True).start()
 threading.Thread(target=daily_tomorrow_reminder_worker, daemon=True).start()
 threading.Thread(target=expense_archive_worker, daemon=True).start()
+threading.Thread(target=snapshot_worker, daemon=True).start()
 
 for ev in longpoll.listen():
     if ev.type != VkEventType.MESSAGE_NEW or not ev.to_me:
@@ -1719,7 +1821,8 @@ for ev in longpoll.listen():
             ("/tomorrow", "Show next day's events"),
             ("/extend", "Extend existing event"),
             ("/largesumsrevisit", "Large expense log rebuilt"),
-            ("/remind", "Set custom reminders")
+            ("/remind", "Set custom reminders"),
+            ("/snapshot", "Save a manual snapshot"),
         ]
         send(uid, "📖 Available commands:")
         for cmd, desc in commands:
@@ -1733,9 +1836,28 @@ for ev in longpoll.listen():
         send(uid, "Reset.", main_menu_kb())
         continue
 
+
+
+    if text.lower() == "/snapshot":
+        ts, snap_dir, count = create_snapshot(str(uid))
+        prune_snapshots(str(uid))
+        snaps = list_snapshots(str(uid))
+        send(uid,
+            f"📸 Snapshot saved: {ts}\n"
+            f"Files copied: {count}\n"
+            f"Snapshots kept: {len(snaps)}/{MAX_SNAPSHOTS_PER_USER}",
+            main_menu_kb()
+        )
+        continue
+
+
+
     if text.lower() == "/date":
         clear_data(uid)
         set_state(uid, STATE_DATE_QUERY)
+        # ── PATCH 2: send two-month calendar with highlighted current date ──
+        send(uid, two_month_calendar_message())
+        # ────────────────────────────────────────────────────────────────────
         send(uid, "📅 Enter date in format YYYY-MM-DD:")
         continue
 
@@ -1893,6 +2015,13 @@ for ev in longpoll.listen():
             clear_data(uid)
             set_state(uid, STATE_START)
             send(uid, "Menu:", main_menu_kb())
+
+        elif text == "/date":
+            clear_data(uid)
+            set_state(uid, STATE_DATE_QUERY)
+            send(uid, two_month_calendar_message())
+            send(uid, "📅 Enter date in format YYYY-MM-DD:")
+            continue   # ← MISSING, must be added
 
         elif text == "/largesumsrevisit":
             count = rebuild_large_expenses(str(uid))
@@ -2752,7 +2881,7 @@ for ev in longpoll.listen():
         if text.isdigit() and len(text) == 4:
             set_data(uid, "year", int(text))
             set_state(uid, STATE_SUGGEST_MONTH)
-            send(uid, "Enter month (1-12):", month_kb())
+            send(uid, "📅Enter month (1-12):", month_kb())
         else:
             send(uid, "Invalid year. Enter YYYY:", year_kb())
         continue
@@ -2764,9 +2893,9 @@ for ev in longpoll.listen():
             year = get_data(uid, "year")
             month = get_data(uid, "month")
             send(uid, days_per_month_message(year, month))
-            send(uid, "Enter day:", day_kb())
+            send(uid, "🔢Enter day:", day_kb())
         else:
-            send(uid, "Invalid month. Enter 1-12:", month_kb())
+            send(uid, "📅Invalid month. Enter 1-12:", month_kb())
         continue
 
     if state == STATE_SUGGEST_DAY:
@@ -2778,12 +2907,12 @@ for ev in longpoll.listen():
             if 1 <= day <= max_day:
                 set_data(uid, "day", day)
                 set_state(uid, STATE_SUGGEST_HOUR)
-                send(uid, "Enter hour (0-23):", hour_kb())
+                send(uid, "⏳Enter hour (0-23):", hour_kb())
             else:
                 send(uid, f"Invalid day. {calendar.month_name[month]} {year} has {max_day} days.")
-                send(uid, "Enter day again:", day_kb())
+                send(uid, "🔢Enter day again:", day_kb())
         else:
-            send(uid, "Please enter a number for the day.")
+            send(uid, "🔢Please enter a number for the day.")
             send(uid, "Enter day again:", day_kb())
         continue
 
@@ -2791,9 +2920,9 @@ for ev in longpoll.listen():
         if text.isdigit() and 0 <= int(text) <= 23:
             set_data(uid, "hour", int(text))
             set_state(uid, STATE_SUGGEST_MINUTE)
-            send(uid, "Enter minute (0-59):", minute_kb())
+            send(uid, "🔄Enter minute (0-59):", minute_kb())
         else:
-            send(uid, "Invalid hour. Enter 0-23:", hour_kb())
+            send(uid, "⏳Invalid hour. Enter 0-23:", hour_kb())
         continue
 
     if state == STATE_SUGGEST_MINUTE:
@@ -2802,7 +2931,7 @@ for ev in longpoll.listen():
             set_state(uid, STATE_SUGGEST_DESC)
             send(uid, "Send description:")
         else:
-            send(uid, "Invalid minute. Enter 0-59:", minute_kb())
+            send(uid, "🔄Invalid minute. Enter 0-59:", minute_kb())
         continue
 
     if state == STATE_SUGGEST_DESC:
@@ -2866,7 +2995,8 @@ for ev in longpoll.listen():
         recurrence = get_data(uid, "recurrence")
         count = get_data(uid, "count")
         duration = get_data(uid, "duration")
-        place = get_data(uid, "place", text)
+        place = text.strip()
+        set_data(uid, "place", place)
         base_dt = datetime(year, month, day, hour, minute)
         uid_event = next_uid(uid)
         delta_map = {
@@ -3330,3 +3460,4 @@ for ev in longpoll.listen():
         clear_data(uid)
         set_state(uid, STATE_START)
         continue
+
