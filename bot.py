@@ -1061,7 +1061,7 @@ def format_large_expenses_for_month(uid, month_key):
     month_entries = [e for e in entries if e["dt"][:7] == month_key]
     if not month_entries:
         return ""
-    lines = [f"⚠️ Large expenses (>{LARGE_EXPENSE_LIMIT:,}):"]
+    lines = [f"⚠️ Large expenses :"]
     for e in month_entries:
         lines.append(format_entry(e))
     return "\n".join(lines)
@@ -2488,7 +2488,11 @@ for ev in longpoll.listen():
                 exp_date_str = datetime.now().strftime("%Y-%m-%d")
                 
             selected_date = datetime.strptime(exp_date_str, "%Y-%m-%d").date()
-            dt_for_expense = datetime.combine(selected_date, datetime.min.time())
+            now = datetime.now()
+            if selected_date == now.date():
+                dt_for_expense = now.replace(second=0, microsecond=0)
+            else:
+                dt_for_expense = datetime.combine(selected_date, datetime.min.time())
             
             # Save with tool
             entry = save_expense(
@@ -2665,7 +2669,11 @@ for ev in longpoll.listen():
         if inc_date_str is None:
             inc_date_str = datetime.now().strftime("%Y-%m-%d")
         selected_date = datetime.strptime(inc_date_str, "%Y-%m-%d").date()
-        dt_for_income = datetime.combine(selected_date, datetime.min.time())
+        now = datetime.now()
+        if selected_date == now.date():
+            dt_for_income = now.replace(second=0, microsecond=0)
+        else:
+            dt_for_income = datetime.combine(selected_date, datetime.min.time())
         entry = save_income(str(uid), amount, desc, dt=dt_for_income)
         mk = selected_date.strftime("%Y-%m")
         month_tot = read_inc_totals(str(uid)).get(mk, {}).get("total", 0)
