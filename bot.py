@@ -39,7 +39,7 @@ STATE_FILE = "states.json"
 PLANNER_DIR = "planners"
 DAYS_PER_BATCH = 4
 RECENT_ENTRIES_PER_PAGE = 7      # ← NEW  ← you can change to 8/12/15 etc
-LARGE_EXPENSE_LIMIT = 3000
+LARGE_EXPENSE_LIMIT = 2999
 KNOWN_TOOLS = ["gp", "hal", "sb", "ren", "oz", "ya", "cert", "cash", "other"]
 SNAPSHOT_DIR = "snapshots"
 MAX_SNAPSHOTS_PER_USER = 3
@@ -101,6 +101,7 @@ STATE_EXP_STATS      = "exp_stats"
 STATE_EXP_MONTH_PICK = "exp_month_pick"
 STATE_EXP_TOOL = "exp_tool"
 # Income states (parallel to expenses)
+STATE_NEWTOOLSBREAKDOWN = "newtoolsbreakdown"
 STATE_INC_MENU        = "inc_menu"
 STATE_INC_DATE_CHOICE = "inc_date_choice"
 STATE_INC_YEAR        = "inc_year"
@@ -110,6 +111,7 @@ STATE_INC_AMOUNT      = "inc_amount"
 STATE_INC_DESC        = "inc_desc"
 STATE_INC_MONTH_PICK  = "inc_month_pick"
 STATE_INC_DELETE      = "inc_delete"
+STATE_LSR_THRESHOLD = "lsr_threshold"
 
 # ================= TOKEN =================
 with open(TOKEN_FILE, "r", encoding="utf-8") as f:
@@ -241,7 +243,8 @@ def quick_commands_kb():
     kb.add_button("/largesumsrevisit", VkKeyboardColor.PRIMARY)
     kb.add_line()   
     kb.add_button("/today", VkKeyboardColor.PRIMARY)    
-    kb.add_button("/tomorrow", VkKeyboardColor.PRIMARY)      
+    kb.add_button("/tomorrow", VkKeyboardColor.PRIMARY) 
+    kb.add_button("/newtoolsbreakdown", VkKeyboardColor.PRIMARY)      
     kb.add_line()
     kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
@@ -860,10 +863,13 @@ def delete_expense_by_index(uid, idx):
     remove_notmy_expense(uid, removed["id"])  # ← NEW
     return removed
 
-def rebuild_large_expenses(uid):
-    """Scan all current expenses and rebuild the large_expenses log from scratch."""
+def rebuild_large_expenses(uid: str, threshold: int = 3000) -> int:
+    """
+    Rebuild large expenses log by scanning all current expenses
+    and keeping only those above the given threshold.
+    """
     all_entries = read_expenses(uid)
-    large = [e for e in all_entries if e.get("amount", 0) > LARGE_EXPENSE_LIMIT]
+    large = [e for e in all_entries if e.get("amount", 0) > threshold]
     write_large_expenses(uid, large)
     return len(large)
 
@@ -920,6 +926,74 @@ def format_tool_breakdown_for_month(uid, month_key):
         lines.append(f"  {'—':<6}  {no_tool_total:>10,.0f}  {pct:>3}%  (no method)")
 
     return "\n".join(lines)
+
+
+# ── NEW: /newtoolsbreakdown helpers ──────────────────────────────────────────
+
+def newtoolsbreakdown_file(uid):
+    return os.path.join(PLANNER_DIR, f"{uid}newtoolsbreakdown.json")
+
+def read_newtoolsbreakdown_start(uid):
+    """Return the ISO datetime string from which the secondary breakdown counts, or None."""
+    path = newtoolsbreakdown_file(uid)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("start_dt")
+    except Exception:
+        return None
+
+def write_newtoolsbreakdown_start(uid, dt_iso: str):
+    _write_json(newtoolsbreakdown_file(uid), {"start_dt": dt_iso})
+
+def format_tool_breakdown_from_date(uid, since_dt_iso: str) -> str:
+    """
+    Same layout as format_tool_breakdown_for_month but counts ALL expenses
+    recorded on or after since_dt_iso (cross-month).
+    """
+    since_dt = datetime.fromisoformat(since_dt_iso)
+    entries = read_expenses(uid)
+    filtered = [e for e in entries if datetime.fromisoformat(e["dt"]) >= since_dt]
+    if not filtered:
+        return ""
+
+    tool_totals: Dict[str, float] = {}
+    no_tool_total = 0.0
+
+    for e in filtered:
+        tool = e.get("tool", "").lower().strip()
+        if not tool or tool == "— skip —":
+            no_tool_total += e["amount"]
+        else:
+            tool_totals[tool] = tool_totals.get(tool, 0.0) + e["amount"]
+
+    if not tool_totals and no_tool_total == 0:
+        return ""
+
+    grand = sum(tool_totals.values()) + no_tool_total
+    since_label = since_dt.strftime("%Y-%m-%d %H:%M")
+    lines = [f"💳 By payment method (since {since_label}):"]
+
+    seen = set()
+    ordered = KNOWN_TOOLS + [t for t in tool_totals if t not in KNOWN_TOOLS]
+    for tool in ordered:
+        amt = tool_totals.get(tool, 0.0)
+        if amt == 0:
+            continue
+        pct = int(amt / grand * 100) if grand else 0
+        lines.append(f"  {tool.upper():<6}  {amt:>10,.0f}  {pct:>3}%")
+        seen.add(tool)
+
+    if no_tool_total > 0:
+        pct = int(no_tool_total / grand * 100) if grand else 0
+        lines.append(f"  {'—':<6}  {no_tool_total:>10,.0f}  {pct:>3}%  (no method)")
+
+    return "\n".join(lines)
+
+# ── END NEW ───────────────────────────────────────────────────────────────────
+
 
 def format_month_stats(uid, month_key):
     totals = read_totals(uid)
@@ -1823,6 +1897,7 @@ for ev in longpoll.listen():
             ("/largesumsrevisit", "Large expense log rebuilt"),
             ("/remind", "Set custom reminders"),
             ("/snapshot", "Save a manual snapshot"),
+            ("/newtoolsbreakdown", "Reset secondary tool breakdown counter from now"),
         ]
         send(uid, "📖 Available commands:")
         for cmd, desc in commands:
@@ -1850,6 +1925,16 @@ for ev in longpoll.listen():
         )
         continue
 
+
+    if text.lower() == "/newtoolsbreakdown":
+        now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M")
+        write_newtoolsbreakdown_start(str(uid), now_iso)
+        send(uid,
+            f"✅ Secondary tool breakdown reset.\n"
+            f"Counting from: {now_iso}",
+            main_menu_kb()
+        )
+        continue
 
 
     if text.lower() == "/date":
@@ -1895,8 +1980,21 @@ for ev in longpoll.listen():
 
 
     if text.lower() == "/largesumsrevisit":
-        count = rebuild_large_expenses(str(uid))
-        send(uid, f"✅ Large expense log rebuilt.\n⚠️ Found {count} expense(s) above {LARGE_EXPENSE_LIMIT:,}.", main_menu_kb())
+        clear_data(uid)
+        set_state(uid, STATE_LSR_THRESHOLD)
+        kb = VkKeyboard(one_time=True)
+        kb.add_button("3000", VkKeyboardColor.PRIMARY)
+        kb.add_button("5000", VkKeyboardColor.PRIMARY)
+        kb.add_button("10000", VkKeyboardColor.PRIMARY)
+        kb.add_line()
+        kb.add_button("15000", VkKeyboardColor.PRIMARY)
+        kb.add_button("Use default (3000)", VkKeyboardColor.SECONDARY)
+        send(uid,
+            "🔧 Rebuilding large expenses index\n\n"
+            "Enter custom threshold (integer) or choose one of the buttons below.\n"
+            "Empty input / Enter → uses 3000.",
+            kb.get_keyboard()
+        )
         continue
 
 
@@ -2015,6 +2113,7 @@ for ev in longpoll.listen():
             clear_data(uid)
             set_state(uid, STATE_START)
             send(uid, "Menu:", main_menu_kb())
+            continue   # ← MISSING, must be added            
 
         elif text == "/date":
             clear_data(uid)
@@ -2023,9 +2122,35 @@ for ev in longpoll.listen():
             send(uid, "📅 Enter date in format YYYY-MM-DD:")
             continue   # ← MISSING, must be added
 
+
         elif text == "/largesumsrevisit":
-            count = rebuild_large_expenses(str(uid))
-            send(uid, f"✅ Large expense log rebuilt.\n⚠️ Found {count} expense(s) above {LARGE_EXPENSE_LIMIT:,}.", quick_commands_kb())
+            clear_data(uid)
+            set_data(uid, "came_from_quick", True)
+            set_state(uid, STATE_LSR_THRESHOLD)
+            kb = VkKeyboard(one_time=True)
+            kb.add_button("3000", VkKeyboardColor.PRIMARY)
+            kb.add_button("5000", VkKeyboardColor.PRIMARY)
+            kb.add_button("10000", VkKeyboardColor.PRIMARY)
+            kb.add_line()
+            kb.add_button("15000", VkKeyboardColor.PRIMARY)
+            kb.add_button("Use default (3000)", VkKeyboardColor.SECONDARY)
+            send(uid,
+                "🔧 Rebuilding large expenses index\n\n"
+                "Enter custom threshold (integer) or choose one of the buttons below.\n"
+                "Empty input / Enter → uses 3000.",
+                kb.get_keyboard()
+            )
+            continue   # ← MISSING, must be added            
+            
+        elif text == "/newtoolsbreakdown":
+            now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M")
+            write_newtoolsbreakdown_start(str(uid), now_iso)
+            send(uid,
+                f"✅ Secondary tool breakdown reset.\n"
+                f"Counting from: {now_iso}",
+                quick_commands_kb()
+            )
+
 
         elif text == "/tomorrow":
             tomorrow = (datetime.now() + timedelta(days=1)).date()
@@ -2041,10 +2166,14 @@ for ev in longpoll.listen():
             clear_data(uid)
             set_state(uid, STATE_START)
             send(uid, "Menu:", main_menu_kb())
+            continue
+
         elif text == "/number":
             clear_data(uid)
             set_state(uid, STATE_NUMBER_QUERY)
             send(uid, "Enter a text to search for in your planner:")
+            continue
+
         elif text == "/extend":
             events = read_events(uid)
             if not events:
@@ -2283,11 +2412,17 @@ for ev in longpoll.listen():
             mk = datetime.now().strftime("%Y-%m")
             send(uid, format_month_stats(str(uid), mk))
 
-            # ── NEW: tool breakdown ──────────────────────────────────────────
+            # ── tool breakdown ───────────────────────────────────────────────
             tool_msg = format_tool_breakdown_for_month(str(uid), mk)
             if tool_msg:
                 send(uid, tool_msg)
-            # ────────────────────────────────────────────────────────────────
+            # ── secondary breakdown (since /newtoolsbreakdown) ───────────────
+            ntb_start = read_newtoolsbreakdown_start(str(uid))
+            if ntb_start:
+                ntb_msg = format_tool_breakdown_from_date(str(uid), ntb_start)
+                if ntb_msg:
+                    send(uid, ntb_msg)
+            # ─────────────────────────────────────────────────────────────────
 
             large_msg = format_large_expenses_for_month(str(uid), mk)
             if large_msg:
@@ -2778,11 +2913,21 @@ for ev in longpoll.listen():
             send(uid, "Menu:", main_menu_kb())
         elif re.match(r"^\d{4}-\d{2}$", text):
             stats_msg = format_month_stats(str(uid), text)
-            large_msg = format_large_expenses_for_month(str(uid), text)  # ← NEW
-
             send(uid, stats_msg)
 
-       
+            # ── tool breakdown ───────────────────────────────────────────────
+            tool_msg = format_tool_breakdown_for_month(str(uid), text)
+            if tool_msg:
+                send(uid, tool_msg)
+            # ── secondary breakdown (since /newtoolsbreakdown) ───────────────
+            ntb_start = read_newtoolsbreakdown_start(str(uid))
+            if ntb_start:
+                ntb_msg = format_tool_breakdown_from_date(str(uid), ntb_start)
+                if ntb_msg:
+                    send(uid, ntb_msg)
+            # ─────────────────────────────────────────────────────────────────
+
+            large_msg = format_large_expenses_for_month(str(uid), text)
             if large_msg:
                 send(uid, large_msg)
 
@@ -2842,6 +2987,49 @@ for ev in longpoll.listen():
         clear_data(uid)
         set_state(uid, STATE_EXP_MENU)
         send(uid, "Expense menu:", exp_menu_kb())
+        continue
+
+
+    if state == STATE_LSR_THRESHOLD:
+        if text == "Back to menu":
+            clear_data(uid)
+            set_state(uid, STATE_START)
+            send(uid, "Menu:", main_menu_kb())
+            continue
+        if text.strip() == "" or text.lower() in ["use default (3000)", "default", "skip"]:
+            threshold = 3000
+        else:
+            try:
+                # clean typical user input variations
+                cleaned = text.replace(" ", "").replace(",", "").replace("₸", "").replace("тг", "")
+                threshold = int(cleaned)
+                if threshold < 100:
+                    send(uid, "Value too low — using 3000 instead.")
+                    threshold = 3000
+                elif threshold > 1000000:
+                    send(uid, "Very high value — using 3000 instead to be safe.")
+                    threshold = 3000
+            except ValueError:
+                send(uid, "Could not parse number — using default 3000.")
+                threshold = 3000
+
+        count = rebuild_large_expenses(str(uid), threshold)
+
+        msg = (
+            f"✅ Large expenses index rebuilt.\n"
+            f"Threshold: > {threshold:,}\n"
+            f"Found and kept {count} matching expense entr"
+            f"{'y' if count == 1 else 'ies'}."
+        )
+
+        # If called from quick commands menu — return there, otherwise main menu
+        if get_data(uid, "came_from_quick", False):
+            send(uid, msg, quick_commands_kb())
+        else:
+            send(uid, msg, main_menu_kb())
+
+        clear_data(uid)
+        set_state(uid, STATE_START)
         continue
 
 
