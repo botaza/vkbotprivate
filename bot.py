@@ -243,9 +243,10 @@ def quick_commands_kb():
     kb.add_button("/largesumsrevisit", VkKeyboardColor.PRIMARY)
     kb.add_line()   
     kb.add_button("/today", VkKeyboardColor.PRIMARY)    
-    kb.add_button("/tomorrow", VkKeyboardColor.PRIMARY) 
-    kb.add_button("/newtoolsbreakdown", VkKeyboardColor.PRIMARY)      
+    kb.add_button("/tomorrow", VkKeyboardColor.PRIMARY)    
     kb.add_line()
+    kb.add_button("/ntb", VkKeyboardColor.PRIMARY) 
+    kb.add_button("/mntb", VkKeyboardColor.SECONDARY)
     kb.add_button("Back to menu", VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
@@ -1897,7 +1898,8 @@ for ev in longpoll.listen():
             ("/largesumsrevisit", "Large expense log rebuilt"),
             ("/remind", "Set custom reminders"),
             ("/snapshot", "Save a manual snapshot"),
-            ("/newtoolsbreakdown", "Reset secondary tool breakdown counter from now"),
+            ("/ntb", "Reset secondary tool breakdown counter from now"),
+            ("/mntb", "Manually set secondary tool breakdown start time"),
         ]
         send(uid, "📖 Available commands:")
         for cmd, desc in commands:
@@ -1926,7 +1928,7 @@ for ev in longpoll.listen():
         continue
 
 
-    if text.lower() == "/newtoolsbreakdown":
+    if text.lower() == "/ntb":
         now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M")
         write_newtoolsbreakdown_start(str(uid), now_iso)
         send(uid,
@@ -1935,6 +1937,28 @@ for ev in longpoll.listen():
             main_menu_kb()
         )
         continue
+
+
+    if text.lower().startswith("/mntb"):
+        parts = text.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            send(uid, "Usage: /mntb YYYY-MM-DDTHH:MM")
+            send(uid, "/mntb 2026-03-14T20:00", main_menu_kb())
+            continue
+        try:
+            dt_iso = parts[1].strip()
+            datetime.fromisoformat(dt_iso)  # validate
+            write_newtoolsbreakdown_start(str(uid), dt_iso)
+            send(uid,
+                f"✅ Secondary tool breakdown manually set.\n"
+                f"Counting from: {dt_iso}",
+                main_menu_kb()
+            )
+        except ValueError:
+            send(uid, "❌ Invalid format. Use YYYY-MM-DDTHH:MM")
+            send(uid, "/mntb 2026-03-14T20:00", main_menu_kb())
+        continue
+
 
 
     if text.lower() == "/date":
@@ -2142,7 +2166,7 @@ for ev in longpoll.listen():
             )
             continue   # ← MISSING, must be added            
             
-        elif text == "/newtoolsbreakdown":
+        elif text == "/ntb":
             now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M")
             write_newtoolsbreakdown_start(str(uid), now_iso)
             send(uid,
