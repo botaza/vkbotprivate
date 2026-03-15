@@ -2532,17 +2532,14 @@ for ev in longpoll.listen():
                 transfer_desc = f"Transfer{': ' + desc if desc else ''}"
                 save_income(str(uid), amount, transfer_desc, dt=dt_for_expense)
 
-            if tool.lower() == "cash":
-                cash_desc = f"Cash expense{': ' + desc if desc else ''}"
-                save_income(str(uid), -amount, cash_desc, dt=dt_for_expense)
+
             
             em    = _cat_emoji(category)
             tool_str = f"  → {tool.upper()}" if tool != "— skip —" else ""
             mk    = selected_date.strftime("%Y-%m")
             month_tot = read_totals(str(uid)).get(mk, {}).get("total", 0)
             note_line = f" 📝 {desc}" if desc else ""
-            inc_note = "\n📈 Auto-added to income" if category == "transfer" else (
-           "\n💵 Deducted from income total" if tool.lower() == "cash" else "")
+            inc_note = "\n📈 Auto-added to income" if category == "transfer" else ""
             
             send(uid,
                 f"✅ {em} {amount:,.0f}{note_line}{tool_str}\n"
